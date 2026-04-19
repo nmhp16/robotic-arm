@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual envs
+venv/
+.venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+
+# Data / checkpoints / logs (generated, never commit)
+# Anchored with leading / so they only match at repo root — otherwise they'd
+# also swallow src/arm_vla/data/ etc.
+/data/
+/checkpoints/
+/wandb/
+/outputs/
+/eval/runs/
+*.hdf5
+*.tfrecord
+
+# Build artifacts (ROS-era — kept for safety during migration)
+build/
+install/
+log/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Graphify cache
+graphify-out/
