@@ -1,8 +1,8 @@
-"""Base env cfg for UR5e pick-and-place.
+"""Base env cfg for UR10 pick-and-place.
 
 Defines the scene (table, cube, target pad), observation groups, and
 terminations. Robot, actions, events, and cameras are provided by the
-concrete subclass in ``pick_place_ur5_env_cfg.py``.
+concrete subclass in ``pick_place_ur10_env_cfg.py``.
 """
 
 from __future__ import annotations

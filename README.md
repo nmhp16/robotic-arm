@@ -1,6 +1,6 @@
 # arm-vla
 
-OpenVLA fine-tuning pipeline for a UR5e + Robotiq 2F-85 pick-and-place task
+OpenVLA fine-tuning pipeline for a UR10 + long-suction pick-and-place task
 in Isaac Lab. Sim-only.
 
 Pipeline: keyboard teleop → Isaac Lab Mimic augmentation → RLDS/TFDS →
@@ -45,11 +45,13 @@ this writing. The training script uses `attn_implementation="sdpa"`.
 
 ```bash
 ./scripts/smoke.sh                         # sanity-check the env loads
+./scripts/smoke.sh --visible --random --steps 200
+                                           # open GUI, drive the arm
 ./scripts/teleop.sh --num-demos 15         # keyboard teleop, record demos
 ./scripts/mimic.sh --num-demos 500         # augment via curobo
 ./scripts/convert.sh                       # HDF5 → RLDS TFDS
 ./scripts/train.sh                         # OpenVLA LoRA fine-tune
-./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
+./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
 ```
 
 ### Eval failure analysis
@@ -66,8 +68,7 @@ Disable entirely with `--no-classify`.
 
 ```
 src/arm_vla/
-  assets/ur5e_cfg.py         UR5e + Robotiq 2F-85 ArticulationCfg
-  tasks/ur5_pick_place/      Isaac Lab env (gym id Isaac-PickPlace-UR5-IK-Rel-v0)
+  tasks/ur10_pick_place/     Isaac Lab env (gym id Isaac-PickPlace-UR10-IK-Rel-v0)
   datagen/                   Mimic env cfg + runtime
   data/rlds_convert.py       HDF5 → RLDS TFDS builder
   training/                  OpenVLA LoRA fine-tune
@@ -79,34 +80,23 @@ scripts/                     CLI wrappers
 
 - **Isaac Lab rather than raw Isaac Sim.** Mimic, teleop device dispatch,
   and the UR assets are already plumbed through manager-based envs.
-- **Parallel-jaw over suction.** OpenVLA's pretraining data is dominated
-  by parallel jaws, and the suction gripper path in Isaac Lab currently
-  requires CPU physics.
-- **UR5/UR5e is not in Isaac Lab's asset library**, only UR10/UR10e.
-  `src/arm_vla/assets/ur5e_cfg.py` mirrors `UR10e_ROBOTIQ_2F_85_CFG`.
-- **Two Python environments.** Isaac Lab ships a torch build that does not
-  mix well with OpenVLA's requirements; separating them is cheaper than
-  debugging clashes.
+- **UR10 + long suction gripper.** Isaac Lab ships this as a pre-built
+  config (`UR10_LONG_SUCTION_CFG`) whose USD has a pre-authored
+  `SurfaceGripper` schema. The UR5e USD on Nucleus does not, and the
+  Robotiq 2F-85 variant spawns a second articulation under the robot
+  prim that Isaac Lab rejects. UR10 is the shortest working path; the
+  pipeline itself is robot-agnostic and swappable.
+- **Two Python environments.** Isaac Lab ships a torch build that does
+  not mix well with OpenVLA's requirements; separating them is cheaper
+  than debugging clashes.
 - **Runtime registration with `OXE_DATASET_CONFIGS`** rather than a fork
   of upstream `openvla`. Schema drift surfaces as a `KeyError` at
   data-loader construction.
-- **IK-relative Δpose on `tool0`, body offset at the fingertip center.**
+- **IK-relative Δpose on `ee_link`, body offset at the suction TCP.**
   Keeps the action interpretable and matches OpenVLA's training distribution.
-
-## UR5e USD fallback
-
-`assets/ur5e_cfg.py` points at NVIDIA's Nucleus server for the UR5e USD. If
-that path is unreachable, convert the URDF bundled with Isaac Sim:
-
-```bash
-mkdir -p assets/ur5e
-~/IsaacLab/isaaclab.sh -p ~/IsaacLab/scripts/tools/convert_urdf.py \
-  ~/isaac/env_isaacsim/lib/python3.12/site-packages/isaacsim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/universal_robots/ur5e/ur5e.urdf \
-  assets/ur5e/ur5e.usd
-```
-
-Then point `_NUCLEUS_UR5E_USD` in `src/arm_vla/assets/ur5e_cfg.py` at the
-local path.
+- **Suction gripper forces CPU physics** (`self.device = "cpu"`) as of
+  Isaac Lab 2.3.2. Acceptable for Mimic augmentation and eval; single-
+  env throughput is the bottleneck, not headcount.
 
 ## Scope
 

@@ -1,4 +1,10 @@
-"""UR5e pick-and-place env, IK-relative actions, RGB cameras, surface suction."""
+"""UR10 pick-and-place env, IK-relative actions, RGB cameras, long-suction gripper.
+
+Uses Isaac Lab's shipped ``UR10_LONG_SUCTION_CFG``, which references a UR10
+USD variant that ships with a pre-authored ``SurfaceGripper`` schema. This
+is the shortest path to a working end-to-end env in Isaac Lab today; see
+README's "Design notes" for the trade-offs.
+"""
 
 from __future__ import annotations
 
@@ -19,15 +25,14 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.sensors import CameraCfg, FrameTransformerCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
+from isaaclab_assets.robots.universal_robots import UR10_LONG_SUCTION_CFG
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
-
-from arm_vla.assets.ur5e_cfg import UR5E_CFG
 
 from . import mdp
 from .pick_place_env_cfg import ObservationsCfg, PickPlaceEnvCfg
 
-# ee_link flange → suction TCP (along the tool axis).
-_TCP_X_OFFSET: float = 0.15
+# ee_link flange → suction TCP along the tool axis (UR10 long suction extension).
+_TCP_X_OFFSET: float = 0.22
 
 
 @configclass
@@ -37,7 +42,7 @@ class EventCfg:
     init_arm_pose = EventTerm(
         func=franka_stack_events.set_default_joint_pose,
         mode="reset",
-        params={"default_pose": [0.0, -1.5707, 1.5707, -1.5707, -1.5707, 0.0]},
+        params={"default_pose": [0.0, -1.5707, 1.5707, -1.5707, 1.5707, 0.0]},
     )
 
     randomize_joint_state = EventTerm(
@@ -50,7 +55,7 @@ class EventCfg:
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.35, 0.50), "y": (-0.12, 0.12), "z": (0.0203, 0.0203), "yaw": (-1.0, 1.0)},
+            "pose_range": {"x": (0.40, 0.60), "y": (-0.15, 0.15), "z": (0.0203, 0.0203), "yaw": (-1.0, 1.0)},
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("cube")],
         },
@@ -60,7 +65,7 @@ class EventCfg:
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.45, 0.60), "y": (-0.15, 0.15), "z": (0.0103, 0.0103), "yaw": (0.0, 0.0)},
+            "pose_range": {"x": (0.55, 0.75), "y": (-0.20, 0.20), "z": (0.0103, 0.0103), "yaw": (0.0, 0.0)},
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("target")],
         },
@@ -84,8 +89,8 @@ class VisuomotorObservationsCfg(ObservationsCfg):
 
 
 @configclass
-class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
-    """UR5e pick-and-place, IK-relative arm action + binary suction."""
+class UR10PickPlaceEnvCfg(PickPlaceEnvCfg):
+    """UR10 pick-and-place, IK-relative arm action + binary long-suction gripper."""
 
     observations: VisuomotorObservationsCfg = VisuomotorObservationsCfg()
 
@@ -100,9 +105,12 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
 
         # SurfaceGripper currently requires CPU physics in Isaac Lab 2.3.x.
         self.device = "cpu"
+        self.sim.device = "cpu"
+        self.sim.use_gpu_pipeline = False
+        self.sim.physx.use_gpu = False
 
         self.events = EventCfg()
-        self.scene.robot = UR5E_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = UR10_LONG_SUCTION_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         self.scene.surface_gripper = SurfaceGripperCfg(
             prim_path="{ENV_REGEX_NS}/Robot/ee_link/SurfaceGripper",
@@ -127,7 +135,7 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
 
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
-            joint_names=["shoulder_.*_joint", "elbow_joint", "wrist_.*_joint"],
+            joint_names=[".*_joint"],
             body_name="ee_link",
             controller=DifferentialIKControllerCfg(
                 command_type="pose", use_relative_mode=True, ik_method="dls"
@@ -174,7 +182,7 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 clipping_range=(0.1, 3.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(1.0, 0.0, 0.5),
+                pos=(1.2, 0.0, 0.6),
                 rot=(0.35355, -0.61237, -0.61237, 0.35355),
                 convention="ros",
             ),

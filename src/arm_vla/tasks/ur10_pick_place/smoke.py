@@ -1,6 +1,6 @@
-"""Sanity check for the UR5e pick-and-place env.
+"""Sanity check for the UR10 pick-and-place env.
 
-    ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur5_pick_place.smoke
+    ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur10_pick_place.smoke
 
 Flags:
     --visible        open the Isaac Sim GUI instead of running headless
@@ -40,13 +40,13 @@ def _run(args: argparse.Namespace) -> int:
         import numpy as np
         import torch
 
-        import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
-        from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
+        import arm_vla.tasks.ur10_pick_place  # noqa: F401  registers gym id
+        from arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg import UR10PickPlaceEnvCfg
 
-        cfg = UR5PickPlaceEnvCfg()
+        cfg = UR10PickPlaceEnvCfg()
         cfg.scene.num_envs = 1
 
-        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg)
+        env = gym.make("Isaac-PickPlace-UR10-IK-Rel-v0", cfg=cfg)
         try:
             obs, _ = env.reset()
             print("observation shapes:")
@@ -63,7 +63,6 @@ def _run(args: argparse.Namespace) -> int:
             rng = np.random.default_rng(0)
             for _ in range(args.steps):
                 if args.random:
-                    # Small Δpose: ±2 cm xyz, ±0.05 rad rpy, gripper 0.
                     a = rng.uniform(-1.0, 1.0, size=7).astype("float32")
                     a[:3] *= 0.02
                     a[3:6] *= 0.05
@@ -91,7 +90,6 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _dump_camera_frames(obs, out_dir: pathlib.Path) -> None:
-    """Write one PNG per RGB camera observation to out_dir."""
     try:
         from PIL import Image
     except ImportError:

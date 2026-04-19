@@ -1,6 +1,6 @@
-"""Mimic cfg for UR5e pick-and-place.
+"""Mimic cfg for UR10 pick-and-place.
 
-Combines ``UR5PickPlaceEnvCfg`` with ``MimicEnvCfg`` and declares two
+Combines ``UR10PickPlaceEnvCfg`` with ``MimicEnvCfg`` and declares two
 subtasks: grasp the cube, then place it on the target.
 """
 
@@ -9,15 +9,15 @@ from __future__ import annotations
 from isaaclab.envs.mimic_env_cfg import MimicEnvCfg, SubTaskConfig
 from isaaclab.utils import configclass
 
-from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
+from arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg import UR10PickPlaceEnvCfg
 
 
 @configclass
-class UR5PickPlaceMimicEnvCfg(UR5PickPlaceEnvCfg, MimicEnvCfg):
+class UR10PickPlaceMimicEnvCfg(UR10PickPlaceEnvCfg, MimicEnvCfg):
     def __post_init__(self):
         super().__post_init__()
 
-        self.datagen_config.name = "ur5_pick_place_mimic_D0"
+        self.datagen_config.name = "ur10_pick_place_mimic_D0"
         self.datagen_config.generation_guarantee = True
         self.datagen_config.generation_keep_failed = False
         self.datagen_config.generation_num_trials = 10
@@ -28,7 +28,7 @@ class UR5PickPlaceMimicEnvCfg(UR5PickPlaceEnvCfg, MimicEnvCfg):
         self.datagen_config.max_num_failures = 25
         self.datagen_config.seed = 1
 
-        self.subtask_configs["ur5"] = [
+        self.subtask_configs["ur10"] = [
             SubTaskConfig(
                 object_ref="cube",
                 subtask_term_signal="grasp",

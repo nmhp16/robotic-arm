@@ -1,4 +1,4 @@
-"""Task-specific MDP terms for UR5e + surface-suction pick-and-place."""
+"""Task-specific MDP terms for UR10 + surface-suction pick-and-place."""
 
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Evaluate a fine-tuned OpenVLA checkpoint via sim rollouts.
 
-    ./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
+    ./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
 
 Loads the base model + LoRA adapters, opens the same Isaac Lab env used for
 data collection, runs N episodes, and writes a summary plus per-episode
@@ -29,7 +29,7 @@ class EvalArgs:
     max_steps_per_episode: int = 400
     instruction: str = "put the blue cube on the green target"
     output_dir: pathlib.Path = pathlib.Path("eval/runs")
-    unnorm_key: str = "ur5_pick_place"
+    unnorm_key: str = "ur10_pick_place"
     record_video: bool = True
     classify_failures: bool = True
 
@@ -41,7 +41,7 @@ def _parse_args() -> EvalArgs:
     p.add_argument("--max-steps-per-episode", type=int, default=400)
     p.add_argument("--instruction", type=str, default="put the blue cube on the green target")
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
-    p.add_argument("--unnorm-key", type=str, default="ur5_pick_place")
+    p.add_argument("--unnorm-key", type=str, default="ur10_pick_place")
     p.add_argument("--no-video", action="store_true")
     p.add_argument("--no-classify", action="store_true")
     args = p.parse_args()
@@ -73,7 +73,7 @@ def main() -> None:
         from PIL import Image
         from transformers import AutoModelForVision2Seq, AutoProcessor
 
-        import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
+        import arm_vla.tasks.ur10_pick_place  # noqa: F401  registers gym id
         from arm_vla.eval import failure_analysis
 
         processor = AutoProcessor.from_pretrained(str(args.checkpoint), trust_remote_code=True)
@@ -88,7 +88,7 @@ def main() -> None:
 
         prompt = f"In: What action should the robot take to {args.instruction}?\nOut:"
 
-        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0")
+        env = gym.make("Isaac-PickPlace-UR10-IK-Rel-v0")
         successes = 0
         results = []
         failure_records: list[dict] = []

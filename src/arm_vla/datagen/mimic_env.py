@@ -1,4 +1,4 @@
-"""Runtime Mimic env class for UR5e pick-and-place."""
+"""Runtime Mimic env class for UR10 pick-and-place."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import torch
 from isaaclab_mimic.envs.franka_stack_ik_rel_mimic_env import FrankaCubeStackIKRelMimicEnv
 
 
-class UR5PickPlaceMimicEnv(FrankaCubeStackIKRelMimicEnv):
+class UR10PickPlaceMimicEnv(FrankaCubeStackIKRelMimicEnv):
     """Reuses the Franka stack IK-rel delta-pose math. Only subtask names differ."""
 
     def get_subtask_term_signals(self, env_ids: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
