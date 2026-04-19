@@ -52,8 +52,6 @@ this writing. The training script uses `attn_implementation="sdpa"`.
 ./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
 ```
 
-See [`PLAN.md`](./PLAN.md) for the full design rationale.
-
 ## Layout
 
 ```
@@ -66,6 +64,24 @@ src/arm_vla/
   eval/rollout.py            sim rollouts of a fine-tuned checkpoint
 scripts/                     CLI wrappers
 ```
+
+## Design notes
+
+- **Isaac Lab rather than raw Isaac Sim.** Mimic, teleop device dispatch,
+  and the UR assets are already plumbed through manager-based envs.
+- **Parallel-jaw over suction.** OpenVLA's pretraining data is dominated
+  by parallel jaws, and the suction gripper path in Isaac Lab currently
+  requires CPU physics.
+- **UR5/UR5e is not in Isaac Lab's asset library**, only UR10/UR10e.
+  `src/arm_vla/assets/ur5e_cfg.py` mirrors `UR10e_ROBOTIQ_2F_85_CFG`.
+- **Two Python environments.** Isaac Lab ships a torch build that does not
+  mix well with OpenVLA's requirements; separating them is cheaper than
+  debugging clashes.
+- **Runtime registration with `OXE_DATASET_CONFIGS`** rather than a fork
+  of upstream `openvla`. Schema drift surfaces as a `KeyError` at
+  data-loader construction.
+- **IK-relative Δpose on `tool0`, body offset at the fingertip center.**
+  Keeps the action interpretable and matches OpenVLA's training distribution.
 
 ## UR5e USD fallback
 
@@ -81,3 +97,8 @@ mkdir -p assets/ur5e
 
 Then point `_NUCLEUS_UR5E_USD` in `src/arm_vla/assets/ur5e_cfg.py` at the
 local path.
+
+## Scope
+
+Explicitly out of scope: real-robot transfer, multi-task training,
+training from scratch, hyperparameter sweeps.
