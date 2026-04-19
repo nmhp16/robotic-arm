@@ -1,15 +1,16 @@
-# CLI wrappers
+# Scripts
 
-Thin shell scripts over the Python entry points. See `../PLAN.md` for the full pipeline.
+Shell wrappers around the Python entry points. Each script selects the
+Python environment it needs.
 
-Each script picks the right Python env:
+| Script        | Env        | Purpose                                       |
+|---------------|------------|-----------------------------------------------|
+| `smoke.sh`    | Isaac Lab  | Headless sanity check of the env              |
+| `teleop.sh`   | Isaac Lab  | Record keyboard demos to HDF5                 |
+| `mimic.sh`    | Isaac Lab  | Augment demos via curobo                      |
+| `convert.sh`  | training   | HDF5 → RLDS TFDS                              |
+| `train.sh`    | training   | OpenVLA LoRA fine-tune                        |
+| `eval.sh`     | Isaac Lab  | Sim rollouts of a fine-tuned checkpoint       |
 
-| Script | Env | Purpose |
-|---|---|---|
-| `teleop.sh` | Isaac Lab | Record keyboard demos → HDF5 |
-| `mimic.sh` | Isaac Lab | Augment demos via curobo |
-| `convert.sh` | training | HDF5 → RLDS TFDS |
-| `train.sh` | training | OpenVLA LoRA fine-tune |
-| `eval.sh` | Isaac Lab | Sim rollouts of fine-tuned checkpoint |
-
-Not yet implemented — stubs will land alongside each phase.
+The Isaac Lab entry is at `$ISAACLAB/isaaclab.sh -p` (defaults to
+`~/IsaacLab`). The training env is at `./.venv` (see `README.md`).

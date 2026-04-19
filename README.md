@@ -1,46 +1,30 @@
 # arm-vla
 
-OpenVLA fine-tuning pipeline on a UR5e (Robotiq 2F-85) pick-and-place task, sim-only via Isaac Lab.
+OpenVLA fine-tuning pipeline for a UR5e + Robotiq 2F-85 pick-and-place task
+in Isaac Lab. Sim-only.
 
-Full design in [`PLAN.md`](./PLAN.md).
+Pipeline: keyboard teleop → Isaac Lab Mimic augmentation → RLDS/TFDS →
+OpenVLA LoRA fine-tune → sim rollout eval.
 
-## Status
+## Requirements
 
-All phases **built**, none yet **validated**. Every script parses but nothing
-has been executed end-to-end (Isaac Sim boot requires the user to drive it).
-
-Suggested validation order (see `PLAN.md` for what each phase does):
-
-1. `./scripts/smoke.sh`               — env loads + steps cleanly, obs shapes print
-2. `./scripts/teleop.sh --num-demos 2`  — record a couple of demos, confirm HDF5 shape
-3. `./scripts/teleop.sh --num-demos 15` — real data collection
-4. `./scripts/mimic.sh --num-demos 50`  — try augmentation at small scale first
-5. `./scripts/mimic.sh --num-demos 500` — full augmentation
-6. `./scripts/convert.sh`             — produces TFDS under `data/rlds/`
-7. `./scripts/train.sh`               — expect bumps on first run (aarch64, OXE registry)
-8. `./scripts/eval.sh --checkpoint checkpoints/.../final`
-
-## Platform
-
-- NVIDIA DGX Spark (GB10, aarch64, CUDA 13)
-- Isaac Lab 2.3.2 at `~/IsaacLab`
+- NVIDIA GPU with CUDA 12.8+ (tested on GB10 / DGX Spark, aarch64)
+- Isaac Lab 2.3.2 (expected at `~/IsaacLab`; override via `ISAACLAB=...`)
 - Python 3.10+
 
-## Two Python environments
+## Environments
 
-This project splits across two envs on purpose:
+Two Python environments, separated to keep Isaac Sim's bundled torch from
+clashing with OpenVLA's.
 
-| Env | Where | Used for |
-|---|---|---|
-| `isaaclab` (bundled) | `~/IsaacLab/_isaac_sim/python.sh` | Teleop data collection, mimic augmentation, eval rollouts |
-| `training` (fresh venv) | `./.venv` | RLDS conversion, OpenVLA LoRA fine-tune |
+| Env              | Location                          | Used for                                 |
+|------------------|-----------------------------------|------------------------------------------|
+| Isaac Lab python | `~/IsaacLab/isaaclab.sh -p`       | teleop, Mimic augmentation, eval rollout |
+| training venv    | `./.venv`                         | RLDS conversion, OpenVLA LoRA fine-tune  |
 
-Mixing torch versions between Isaac Sim's bundled one and OpenVLA's requirements is the main foot-gun — keeping them separate avoids it.
-
-### Install (training env)
+### Training venv
 
 ```bash
-# aarch64 + CUDA 13 torch (DGX Spark)
 python3.10 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -48,43 +32,45 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -e ".[ml,dev]"
 ```
 
-`flash-attn` intentionally omitted — it fails to build on aarch64 as of Apr 2026. The training script falls back to `attn_implementation="sdpa"`.
+`flash-attn` is intentionally omitted — it does not build on aarch64 as of
+this writing. The training script uses `attn_implementation="sdpa"`.
 
-### Install (sim env)
+### Isaac Lab env
 
 ```bash
 ~/IsaacLab/isaaclab.sh -p -m pip install -e ".[sim]"
 ```
 
-## Commands (not yet implemented — see PLAN.md)
+## Usage
 
 ```bash
-./scripts/teleop.sh                     # keyboard teleop, collect 15 demos
-./scripts/mimic.sh --num-demos 500      # augment
-./scripts/convert.sh                    # HDF5 → RLDS
-./scripts/train.sh                      # OpenVLA LoRA fine-tune
-./scripts/eval.sh                       # rollouts in sim, log success rate
+./scripts/smoke.sh                         # sanity-check the env loads
+./scripts/teleop.sh --num-demos 15         # keyboard teleop, record demos
+./scripts/mimic.sh --num-demos 500         # augment via curobo
+./scripts/convert.sh                       # HDF5 → RLDS TFDS
+./scripts/train.sh                         # OpenVLA LoRA fine-tune
+./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
 ```
 
-## Repo layout
+See [`PLAN.md`](./PLAN.md) for the full design rationale.
+
+## Layout
 
 ```
 src/arm_vla/
-  assets/ur5e_cfg.py       UR5e + Robotiq 2F-85 ArticulationCfg (not in Isaac Lab)
-  tasks/ur5_pick_place/    Isaac Lab env
-  teleop/                  keyboard → HDF5
-  datagen/                 mimic config + augmentation
-  data/                    HDF5 → RLDS
-  training/                LoRA fine-tune
-  eval/                    sim rollouts
-scripts/                   thin CLI wrappers
+  assets/ur5e_cfg.py         UR5e + Robotiq 2F-85 ArticulationCfg
+  tasks/ur5_pick_place/      Isaac Lab env (gym id Isaac-PickPlace-UR5-IK-Rel-v0)
+  datagen/                   Mimic env cfg + runtime
+  data/rlds_convert.py       HDF5 → RLDS TFDS builder
+  training/                  OpenVLA LoRA fine-tune
+  eval/rollout.py            sim rollouts of a fine-tuned checkpoint
+scripts/                     CLI wrappers
 ```
 
-### UR5e USD fallback
+## UR5e USD fallback
 
-`assets/ur5e_cfg.py` points at NVIDIA's Nucleus server for the UR5e USD
-(`{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd`). If that path
-404s on your network, convert the URDF bundled with Isaac Sim instead:
+`assets/ur5e_cfg.py` points at NVIDIA's Nucleus server for the UR5e USD. If
+that path is unreachable, convert the URDF bundled with Isaac Sim:
 
 ```bash
 mkdir -p assets/ur5e
@@ -93,4 +79,5 @@ mkdir -p assets/ur5e
   assets/ur5e/ur5e.usd
 ```
 
-Then edit `_NUCLEUS_UR5E_USD` in `src/arm_vla/assets/ur5e_cfg.py` to a local path.
+Then point `_NUCLEUS_UR5E_USD` in `src/arm_vla/assets/ur5e_cfg.py` at the
+local path.

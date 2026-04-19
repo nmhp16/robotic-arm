@@ -1,29 +1,19 @@
-# OpenVLA LoRA fine-tune hyperparameters.
-# Tuned for a single-task sim dataset of ~500 demos on a DGX Spark (GB10).
-# Smaller datasets benefit from higher LoRA rank and lower learning rate to
-# avoid overfitting.
-
 model:
   vla_path: openvla/openvla-7b
-  # aarch64: flash-attn doesn't build cleanly — sdpa is the safe default here
+  # flash-attn does not build on aarch64; sdpa is the portable default.
   attn_implementation: sdpa
 
 data:
   data_root_dir: data/rlds
   dataset_name: ur5_pick_place
-  image_aug: true          # random crop + color jitter, helps generalization
+  image_aug: true
   shuffle_buffer_size: 10000
-  # Action dims are normalized to [-1, 1] using q01/q99 per-dim; stats are
-  # computed from the training split and saved alongside the checkpoint.
   action_normalization: q99
 
 lora:
   rank: 32
   alpha: 16
   dropout: 0.0
-  # LoRA on attention projections of both LLM and vision backbone. Excluding
-  # the lm_head follows the OpenVLA finetune recipe — the action token
-  # embeddings are trained anyway.
   target_modules:
     - q_proj
     - k_proj
@@ -34,12 +24,12 @@ lora:
     - down_proj
 
 training:
-  batch_size: 8            # per-device; unified memory on GB10 leaves headroom
-  grad_accum: 2            # effective batch 16
+  batch_size: 8
+  grad_accum: 2
   learning_rate: 5.0e-4
   lr_scheduler: cosine
   warmup_steps: 100
-  max_steps: 50000         # ~6–12 h on GB10; check wall-clock & cut if loss plateaus
+  max_steps: 50000
   save_every: 2500
   log_every: 20
   bf16: true
@@ -47,4 +37,4 @@ training:
 wandb:
   enabled: true
   project: arm-vla
-  mode: offline            # sync later with `wandb sync`
+  mode: offline

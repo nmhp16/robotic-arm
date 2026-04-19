@@ -1,13 +1,4 @@
-"""UR5e + Robotiq 2F-85 pick-and-place env with IK-rel actions + RGB cameras.
-
-Concrete subclass of ``PickPlaceEnvCfg``:
-- UR5e arm with Robotiq 2F-85 parallel-jaw gripper
-- IK-relative 6-DoF Δpose action + binary gripper action
-- Wrist + third-person 224×224 RGB cameras (OpenVLA input size)
-- Events: fixed home joint pose + randomized cube/target starts
-- Keyboard teleop device wired in
-- Runs on GPU (parallel-jaw, unlike the suction-forced-CPU path)
-"""
+"""UR5e + Robotiq 2F-85 pick-and-place env, IK-relative actions, RGB cameras."""
 
 from __future__ import annotations
 
@@ -39,19 +30,21 @@ from arm_vla.assets.ur5e_cfg import (
 from . import mdp
 from .pick_place_env_cfg import ObservationsCfg, PickPlaceEnvCfg
 
+# tool0 → fingertip center (2F-85, open).
+_TCP_Z_OFFSET: float = 0.155
+
 
 @configclass
 class EventCfg:
-    """Reset-time events: home the arm, jitter joints slightly, randomize cube
-    and target within a workspace box on the table."""
+    """Reset events: home pose, small joint jitter, randomized cube + target."""
 
-    init_ur5_arm_pose = EventTerm(
+    init_arm_pose = EventTerm(
         func=franka_stack_events.set_default_joint_pose,
         mode="reset",
         params={"default_pose": [0.0, -1.5707, 1.5707, -1.5707, -1.5707, 0.0]},
     )
 
-    randomize_ur5_joint_state = EventTerm(
+    randomize_joint_state = EventTerm(
         func=franka_stack_events.randomize_joint_by_gaussian_offset,
         mode="reset",
         params={"mean": 0.0, "std": 0.02, "asset_cfg": SceneEntityCfg("robot")},
@@ -61,7 +54,6 @@ class EventCfg:
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            # UR5e has a smaller reach than UR10 — tighter workspace box.
             "pose_range": {"x": (0.35, 0.50), "y": (-0.12, 0.12), "z": (0.0203, 0.0203), "yaw": (-1.0, 1.0)},
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("cube")],
@@ -97,7 +89,7 @@ class VisuomotorObservationsCfg(ObservationsCfg):
 
 @configclass
 class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
-    """UR5e + Robotiq 2F-85 pick-and-place, IK-rel actions, RGB cameras."""
+    """UR5e + Robotiq 2F-85 pick-and-place, IK-relative actions, RGB cameras."""
 
     observations: VisuomotorObservationsCfg = VisuomotorObservationsCfg()
 
@@ -107,7 +99,6 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
 
     image_obs_list = ["table_cam", "wrist_cam"]
 
-    # Exposed to mdp helpers via ``env.cfg.<name>``.
     gripper_joint_name: str = UR5E_GRIPPER_JOINT_NAME
     gripper_open_val: float = UR5E_GRIPPER_OPEN_VAL
     gripper_close_val: float = UR5E_GRIPPER_CLOSE_VAL
@@ -116,14 +107,8 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
         super().__post_init__()
 
         self.events = EventCfg()
-
-        # Robot with 2F-85 parallel-jaw gripper. Parallel-jaw works on GPU —
-        # no device=cpu forcing like the suction variant.
         self.scene.robot = UR5E_ROBOTIQ_2F_85_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
-        # EE frame transformer. ``tool0`` is UR's flange frame; we offset along
-        # the tool z-axis by the 2F-85 fingertip offset (~0.155 m) so the TCP
-        # tracked by ee_frame sits where the fingers actually grasp.
         self.scene.ee_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Robot/base_link",
             debug_vis=True,
@@ -132,14 +117,11 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 FrameTransformerCfg.FrameCfg(
                     prim_path="{ENV_REGEX_NS}/Robot/tool0",
                     name="end_effector",
-                    offset=OffsetCfg(pos=[0.0, 0.0, 0.155]),
+                    offset=OffsetCfg(pos=[0.0, 0.0, _TCP_Z_OFFSET]),
                 ),
             ],
         )
 
-        # Arm action: IK-relative 6-DoF Δpose. ``tool0`` is the body we drive;
-        # the body_offset puts the IK target at the fingertip center so Δpose
-        # is expressed in that useful frame.
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=["shoulder_.*_joint", "elbow_joint", "wrist_.*_joint"],
@@ -148,11 +130,9 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 command_type="pose", use_relative_mode=True, ik_method="dls"
             ),
             scale=1.0,
-            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.155]),
+            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, _TCP_Z_OFFSET]),
         )
 
-        # Gripper action: binary, drives ``finger_joint`` between open/close
-        # values defined in ur5e_cfg.py.
         self.actions.gripper_action = BinaryJointPositionActionCfg(
             asset_name="robot",
             joint_names=[self.gripper_joint_name],
@@ -160,8 +140,6 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             close_command_expr={self.gripper_joint_name: self.gripper_close_val},
         )
 
-        # Wrist camera — mounted on tool0 looking along the approach axis
-        # (+z of tool0). 224×224 for OpenVLA input.
         self.scene.wrist_cam = CameraCfg(
             prim_path="{ENV_REGEX_NS}/Robot/tool0/wrist_cam",
             update_period=0.0,
@@ -174,7 +152,6 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 horizontal_aperture=20.955,
                 clipping_range=(0.03, 2.0),
             ),
-            # Camera z looks along tool0's +z (approach axis).
             offset=CameraCfg.OffsetCfg(
                 pos=(0.05, 0.0, 0.0),
                 rot=(0.0, 0.707, 0.707, 0.0),
@@ -182,7 +159,6 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             ),
         )
 
-        # Third-person camera at a fixed world pose framing the UR5 workspace.
         self.scene.table_cam = CameraCfg(
             prim_path="{ENV_REGEX_NS}/table_cam",
             update_period=0.0,
@@ -205,8 +181,6 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
         self.sim.render.antialiasing_mode = "DLAA"
         self.num_rerenders_on_reset = 3
 
-        # Keyboard teleop. SpaceMouse slot intentionally omitted — user only has
-        # keyboard. Plugging one in later = one extra Se3SpaceMouseCfg entry.
         self.teleop_devices = DevicesCfg(
             devices={
                 "keyboard": Se3KeyboardCfg(

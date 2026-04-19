@@ -1,4 +1,7 @@
-"""Mimic-based demo augmentation — registers the Mimic gym id on import."""
+"""Mimic-based demo augmentation.
+
+Registers gym id ``Isaac-PickPlace-UR5-IK-Rel-Mimic-v0``.
+"""
 
 import gymnasium as gym
 

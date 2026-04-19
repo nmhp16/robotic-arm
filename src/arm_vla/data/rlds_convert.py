@@ -1,23 +1,20 @@
 """HDF5 → RLDS (TFDS) conversion for OpenVLA fine-tuning.
 
-Reads the mimic-augmented HDF5 at ``data/augmented/demos.hdf5`` and writes a
-TFDS dataset matching the Open X-Embodiment (OXE) feature schema that
-OpenVLA's fine-tune script consumes.
+Reads Mimic-augmented HDF5 episodes and emits a TFDS dataset matching the
+Open X-Embodiment feature schema that OpenVLA expects.
 
-Per-step features written:
+Per-step features::
 
-  observation.image         (224, 224, 3) uint8    — third-person (table_cam)
-  observation.wrist_image   (224, 224, 3) uint8    — wrist cam
-  observation.state         (8,) float32           — eef_pos(3) + eef_quat(4) + gripper(1)
-  action                    (7,) float32           — Δxyz(3) + Δrpy(3) + gripper(1)
-  language_instruction      string
-  is_first / is_last / is_terminal  bool
+    observation.image         (224, 224, 3) uint8   third-person RGB
+    observation.wrist_image   (224, 224, 3) uint8   wrist RGB
+    observation.state         (8,) float32          eef_pos(3) + eef_quat(4) + gripper(1)
+    action                    (7,) float32          Delta pose(6) + gripper(1)
+    language_instruction      string
+    is_first / is_last / is_terminal
 
-A train/val split is made by demo id: first 90% to train, last 10% to val.
-Language is a single fixed sentence — this is a single-task dataset, the VLA
-just needs to condition on text even though all episodes share it.
+Splits: 90% of demos to train, 10% to val, by demo id.
 
-Run with::
+Usage::
 
     python -m arm_vla.data.rlds_convert \\
         --input data/augmented/demos.hdf5 \\
@@ -38,18 +35,17 @@ import tensorflow_datasets as tfds
 
 _DEFAULT_INSTRUCTION = "put the blue cube on the green target"
 _IMG_H, _IMG_W = 224, 224
-_STATE_DIM = 8  # eef_pos(3) + eef_quat(4) + gripper(1)
-_ACTION_DIM = 7  # 6-DoF IK-rel + binary gripper
+_STATE_DIM = 8
+_ACTION_DIM = 7
 
 
 class UR5PickPlace(tfds.core.GeneratorBasedBuilder):
-    """OXE-compatible TFDS builder for our UR5e pick-and-place demos."""
+    """TFDS builder for UR5e pick-and-place demos."""
 
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {"1.0.0": "Initial."}
 
-    # These are populated by the CLI and baked into the builder at build time —
-    # TFDS requires them before _info() is called.
+    # Set by the CLI before the builder constructs.
     _input_path: str = ""
     _instruction: str = _DEFAULT_INSTRUCTION
 
@@ -64,25 +60,15 @@ class UR5PickPlace(tfds.core.GeneratorBasedBuilder):
                             shape=(_IMG_H, _IMG_W, 3),
                             dtype=tf.uint8,
                             encoding_format="jpeg",
-                            doc="Third-person RGB (table_cam).",
                         ),
                         "wrist_image": tfds.features.Image(
                             shape=(_IMG_H, _IMG_W, 3),
                             dtype=tf.uint8,
                             encoding_format="jpeg",
-                            doc="Wrist-mounted RGB.",
                         ),
-                        "state": tfds.features.Tensor(
-                            shape=(_STATE_DIM,),
-                            dtype=tf.float32,
-                            doc="[eef_x, eef_y, eef_z, quat_w, quat_x, quat_y, quat_z, gripper].",
-                        ),
+                        "state": tfds.features.Tensor(shape=(_STATE_DIM,), dtype=tf.float32),
                     }),
-                    "action": tfds.features.Tensor(
-                        shape=(_ACTION_DIM,),
-                        dtype=tf.float32,
-                        doc="[Δx, Δy, Δz, Δroll, Δpitch, Δyaw, gripper_cmd].",
-                    ),
+                    "action": tfds.features.Tensor(shape=(_ACTION_DIM,), dtype=tf.float32),
                     "discount": tfds.features.Scalar(dtype=tf.float32),
                     "reward": tfds.features.Scalar(dtype=tf.float32),
                     "is_first": tfds.features.Scalar(dtype=tf.bool),
@@ -99,11 +85,15 @@ class UR5PickPlace(tfds.core.GeneratorBasedBuilder):
 
     def _split_generators(self, dl_manager):  # noqa: ARG002
         with h5py.File(self._input_path, "r") as f:
-            demo_ids = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[-1]) if "_" in k else 0)
+            demo_ids = sorted(
+                f["data"].keys(),
+                key=lambda k: int(k.split("_")[-1]) if "_" in k else 0,
+            )
         n_train = max(1, int(0.9 * len(demo_ids)))
+        val_ids = demo_ids[n_train:] if len(demo_ids) > n_train else []
         return {
             "train": self._generate_examples(demo_ids[:n_train]),
-            "val": self._generate_examples(demo_ids[n_train:]) if len(demo_ids) > n_train else self._generate_examples([]),
+            "val": self._generate_examples(val_ids),
         }
 
     def _generate_examples(self, demo_ids: list[str]) -> Iterator[tuple[str, dict[str, Any]]]:
@@ -111,11 +101,14 @@ class UR5PickPlace(tfds.core.GeneratorBasedBuilder):
             return
         with h5py.File(self._input_path, "r") as f:
             for demo_id in demo_ids:
-                demo = f["data"][demo_id]
-                yield demo_id, _episode_from_h5(demo, demo_id, self._input_path, self._instruction)
+                yield demo_id, _episode_from_h5(
+                    f["data"][demo_id], demo_id, self._input_path, self._instruction
+                )
 
 
-def _episode_from_h5(demo: h5py.Group, demo_id: str, path: str, instruction: str) -> dict[str, Any]:
+def _episode_from_h5(
+    demo: h5py.Group, demo_id: str, path: str, instruction: str
+) -> dict[str, Any]:
     actions = np.asarray(demo["actions"], dtype=np.float32)
     T = actions.shape[0]
     obs = demo["obs"]["policy"]
@@ -148,7 +141,7 @@ def _episode_from_h5(demo: h5py.Group, demo_id: str, path: str, instruction: str
     }
 
 
-def _build_cli():
+def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=pathlib.Path, default=pathlib.Path("data/augmented/demos.hdf5"))
     p.add_argument("--output", type=pathlib.Path, default=pathlib.Path("data/rlds"))
@@ -156,7 +149,7 @@ def _build_cli():
     args = p.parse_args()
 
     if not args.input.exists():
-        raise SystemExit(f"missing input dataset: {args.input}")
+        raise SystemExit(f"input not found: {args.input}")
 
     UR5PickPlace._input_path = str(args.input.resolve())
     UR5PickPlace._instruction = args.instruction
@@ -164,11 +157,11 @@ def _build_cli():
     builder = UR5PickPlace(data_dir=str(args.output))
     builder.download_and_prepare()
     info = builder.info
-    print(f"built TFDS dataset: {info.full_name} → {args.output}")
+    print(f"built {info.full_name} at {args.output}")
     print(f"  train: {info.splits['train'].num_examples} episodes")
     if "val" in info.splits:
         print(f"  val:   {info.splits['val'].num_examples} episodes")
 
 
 if __name__ == "__main__":
-    _build_cli()
+    main()

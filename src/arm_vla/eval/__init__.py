@@ -1,1 +1,1 @@
-"""Eval rollouts — loads fine-tuned checkpoint, runs sim episodes, logs success."""
+"""Sim rollouts of a fine-tuned OpenVLA checkpoint."""

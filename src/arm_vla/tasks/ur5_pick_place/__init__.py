@@ -1,7 +1,6 @@
-"""UR5e pick-and-place env — registers gym environments on import.
+"""UR5e pick-and-place env.
 
-Gym ids:
-  - ``Isaac-PickPlace-UR5-IK-Rel-v0``
+Registers gym id ``Isaac-PickPlace-UR5-IK-Rel-v0``.
 """
 
 import gymnasium as gym

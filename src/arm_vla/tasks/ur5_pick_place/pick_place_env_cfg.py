@@ -1,7 +1,8 @@
-"""Abstract base env cfg for UR5e + Robotiq 2F-85 pick-and-place.
+"""Base env cfg for UR5e pick-and-place.
 
-Defines scene (table + cube + target zone), obs groups, terminations. Robot,
-actions, events, cameras are filled in by ``pick_place_ur5_env_cfg.py``.
+Defines the scene (table, cube, target pad), observation groups, and
+terminations. Robot, actions, events, and cameras are provided by the
+concrete subclass in ``pick_place_ur5_env_cfg.py``.
 """
 
 from __future__ import annotations
@@ -65,8 +66,7 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # Kinematic target pad — kinematic so the cube can rest on it without
-    # pushing it out of place, gravity-disabled so it stays put between resets.
+    # Kinematic + gravity-disabled so the target pad stays where reset placed it.
     target = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Target",
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.6, 0.1, 0.0103], rot=[1, 0, 0, 0]),
@@ -114,8 +114,6 @@ class ObservationsCfg:
 
     @configclass
     class SubtaskCfg(ObsGroup):
-        """Subtask annotations for mimic segmentation."""
-
         grasp = ObsTerm(
             func=mdp.object_grasped,
             params={
@@ -166,8 +164,7 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
-    # Exposed at cfg level so mdp helpers can read them (``env.cfg.<name>``).
-    # Populated by the concrete subclass (UR5e specifics).
+    # Read by mdp helpers via env.cfg.gripper_joint_name.
     gripper_joint_name: str = "finger_joint"
 
     commands = None

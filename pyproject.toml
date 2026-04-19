@@ -1,13 +1,12 @@
 [project]
 name = "arm-vla"
 version = "0.1.0"
-description = "OpenVLA fine-tuning pipeline on a UR5e pick-and-place task in Isaac Lab."
+description = "OpenVLA fine-tuning pipeline for a UR5e pick-and-place task in Isaac Lab."
 requires-python = ">=3.10"
 readme = "README.md"
 
-# Runtime deps shared by all entry points. Kept small.
-# NOTE: torch is NOT pinned here — on aarch64 + CUDA 13 you must install it
-# from NVIDIA's index. See README for the exact command.
+# torch is installed separately from NVIDIA's index; see README for the
+# platform-specific wheel command.
 dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
@@ -16,7 +15,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Installed into the training venv (separate from Isaac Lab's bundled python).
 ml = [
     "transformers>=4.46,<4.50",
     "accelerate>=1.0",
@@ -34,12 +32,9 @@ ml = [
     "openvla @ git+https://github.com/openvla/openvla@main",
 ]
 
-# Installed into Isaac Lab's bundled python, used for teleop + mimic + eval rollout.
-# Isaac Lab brings torch, so we only add what's missing there for inference.
 sim = [
     "h5py>=3.10",
     "tensorflow-datasets>=4.9",
-    # Needed by eval.rollout — OpenVLA inference in-loop with the sim env.
     "transformers>=4.46,<4.50",
     "peft>=0.13",
     "pillow>=10",

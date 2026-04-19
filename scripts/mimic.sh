@@ -25,17 +25,17 @@ TASK="Isaac-PickPlace-UR5-IK-Rel-Mimic-v0"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --num-demos) NUM_DEMOS="$2"; shift 2 ;;
-        --input) INPUT="$2"; shift 2 ;;
-        --output) OUTPUT="$2"; shift 2 ;;
-        --num-envs) NUM_ENVS="$2"; shift 2 ;;
-        --task) TASK="$2"; shift 2 ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        --input)     INPUT="$2"; shift 2 ;;
+        --output)    OUTPUT="$2"; shift 2 ;;
+        --num-envs)  NUM_ENVS="$2"; shift 2 ;;
+        --task)      TASK="$2"; shift 2 ;;
+        -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
 
 if [[ ! -f "$INPUT" ]]; then
-    echo "missing input dataset: $INPUT (run ./scripts/teleop.sh first)" >&2
+    echo "input not found: $INPUT (run ./scripts/teleop.sh first)" >&2
     exit 1
 fi
 
@@ -43,12 +43,9 @@ mkdir -p "$(dirname "$OUTPUT")"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
-# Pre-import our datagen package to register the mimic gym id before
-# generate_dataset.py looks it up.
 exec "$ISAACLAB/isaaclab.sh" -p -c "
-import arm_vla.datagen  # registers Isaac-PickPlace-UR5-IK-Rel-Mimic-v0
-import runpy
-import sys
+import arm_vla.datagen
+import runpy, sys
 sys.argv = [
     'generate_dataset.py',
     '--task', '$TASK',

@@ -1,1 +1,1 @@
-"""HDF5 → RLDS conversion for OpenVLA training."""
+"""HDF5 → RLDS conversion."""

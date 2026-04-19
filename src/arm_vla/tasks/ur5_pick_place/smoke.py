@@ -1,9 +1,9 @@
-"""Smoke test for the UR5e pick-and-place env.
-
-Boots headless, spawns the env, steps with zero actions for ~1 s, prints obs
-keys + shapes, exits. No policy, no teleop — just confirms wiring.
+"""Headless sanity check for the UR5e pick-and-place env.
 
     ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur5_pick_place.smoke
+
+Spawns the env, steps with zero actions for ~1 s, prints observation
+shapes, exits.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import traceback
 from isaaclab.app import AppLauncher
 
 
-def _run():
+def _run() -> int:
     app = AppLauncher(headless=True)
     simulation_app = app.app
 
@@ -30,8 +30,8 @@ def _run():
 
         env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg)
         try:
-            obs, info = env.reset()
-            print("=== observation keys / shapes ===")
+            obs, _ = env.reset()
+            print("observation shapes:")
             for group, terms in obs.items():
                 if isinstance(terms, dict):
                     for name, val in terms.items():
@@ -42,9 +42,9 @@ def _run():
                     print(f"  {group}: {shape}")
 
             action = torch.zeros((1, 7), device=env.unwrapped.device)
-            for i in range(20):  # 20 * decimation(5) * dt(0.01) = 1 s
+            for _ in range(20):
                 env.step(action)
-            print(f"=== stepped {i + 1} times, env alive ===")
+            print("stepped 20 times, env alive")
         finally:
             env.close()
 
