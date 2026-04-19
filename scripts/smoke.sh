@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Headless sanity check for the UR5e pick-and-place env.
+# Sanity check for the UR5e pick-and-place env.
+#
+# Flags (forwarded to the Python module):
+#   --visible         open the Isaac Sim GUI
+#   --random          drive the arm with small random Delta-pose actions
+#   --steps N         number of sim steps (default: 20)
+#   --dump-cams DIR   write one frame per RGB camera to DIR
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

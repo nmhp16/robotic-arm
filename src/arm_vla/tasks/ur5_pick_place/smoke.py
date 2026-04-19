@@ -1,25 +1,43 @@
-"""Headless sanity check for the UR5e pick-and-place env.
+"""Sanity check for the UR5e pick-and-place env.
 
     ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur5_pick_place.smoke
 
-Spawns the env, steps with zero actions for ~1 s, prints observation
-shapes, exits.
+Flags:
+    --visible        open the Isaac Sim GUI instead of running headless
+    --random         drive the arm with small random Delta-pose actions so
+                     motion is visible (otherwise arm stays at home)
+    --steps N        number of sim steps (default: 20)
+    --dump-cams DIR  write one frame from each RGB camera to DIR
+
+Prints observation shapes, then steps the env.
 """
 
 from __future__ import annotations
 
+import argparse
+import pathlib
 import sys
 import traceback
 
 from isaaclab.app import AppLauncher
 
 
-def _run() -> int:
-    app = AppLauncher(headless=True)
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument("--visible", action="store_true")
+    p.add_argument("--random", action="store_true")
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--dump-cams", type=pathlib.Path, default=None)
+    return p.parse_args()
+
+
+def _run(args: argparse.Namespace) -> int:
+    app = AppLauncher(headless=not args.visible, enable_cameras=True)
     simulation_app = app.app
 
     try:
         import gymnasium as gym  # noqa: F401
+        import numpy as np
         import torch
 
         import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
@@ -41,10 +59,25 @@ def _run() -> int:
                     shape = tuple(terms.shape) if hasattr(terms, "shape") else type(terms).__name__
                     print(f"  {group}: {shape}")
 
-            action = torch.zeros((1, 7), device=env.unwrapped.device)
-            for _ in range(20):
-                env.step(action)
-            print("stepped 20 times, env alive")
+            device = env.unwrapped.device
+            rng = np.random.default_rng(0)
+            for _ in range(args.steps):
+                if args.random:
+                    # Small Δpose: ±2 cm xyz, ±0.05 rad rpy, gripper 0.
+                    a = rng.uniform(-1.0, 1.0, size=7).astype("float32")
+                    a[:3] *= 0.02
+                    a[3:6] *= 0.05
+                    a[6] = 0.0
+                    action = torch.from_numpy(a).to(device).unsqueeze(0)
+                else:
+                    action = torch.zeros((1, 7), device=device)
+                obs, *_ = env.step(action)
+
+            print(f"stepped {args.steps} times, env alive")
+
+            if args.dump_cams is not None:
+                _dump_camera_frames(obs, args.dump_cams)
+
         finally:
             env.close()
 
@@ -57,5 +90,25 @@ def _run() -> int:
     return 0
 
 
+def _dump_camera_frames(obs, out_dir: pathlib.Path) -> None:
+    """Write one PNG per RGB camera observation to out_dir."""
+    try:
+        from PIL import Image
+    except ImportError:
+        print("PIL not installed; skipping camera dump", file=sys.stderr)
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    policy = obs.get("policy", {}) if isinstance(obs, dict) else {}
+    for name in ("table_cam", "wrist_cam"):
+        tensor = policy.get(name)
+        if tensor is None:
+            continue
+        frame = tensor[0].cpu().numpy().astype("uint8")
+        path = out_dir / f"{name}.png"
+        Image.fromarray(frame).save(path)
+        print(f"wrote {path}")
+
+
 if __name__ == "__main__":
-    sys.exit(_run())
+    sys.exit(_run(_parse_args()))
