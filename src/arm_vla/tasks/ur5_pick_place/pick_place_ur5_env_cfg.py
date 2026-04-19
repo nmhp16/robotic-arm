@@ -1,14 +1,15 @@
-"""UR5e + Robotiq 2F-85 pick-and-place env, IK-relative actions, RGB cameras."""
+"""UR5e pick-and-place env, IK-relative actions, RGB cameras, surface suction."""
 
 from __future__ import annotations
 
 import isaaclab.sim as sim_utils
+from isaaclab.assets import SurfaceGripperCfg
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.devices.device_base import DevicesCfg
 from isaaclab.devices.keyboard import Se3KeyboardCfg
 from isaaclab.envs.mdp.actions.actions_cfg import (
-    BinaryJointPositionActionCfg,
     DifferentialInverseKinematicsActionCfg,
+    SurfaceGripperBinaryActionCfg,
 )
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
@@ -20,18 +21,13 @@ from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.utils import configclass
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 
-from arm_vla.assets.ur5e_cfg import (
-    UR5E_GRIPPER_CLOSE_VAL,
-    UR5E_GRIPPER_JOINT_NAME,
-    UR5E_GRIPPER_OPEN_VAL,
-    UR5E_ROBOTIQ_2F_85_CFG,
-)
+from arm_vla.assets.ur5e_cfg import UR5E_CFG
 
 from . import mdp
 from .pick_place_env_cfg import ObservationsCfg, PickPlaceEnvCfg
 
-# tool0 → fingertip center (2F-85, open).
-_TCP_Z_OFFSET: float = 0.155
+# ee_link flange → suction TCP (along the tool axis).
+_TCP_X_OFFSET: float = 0.15
 
 
 @configclass
@@ -89,7 +85,7 @@ class VisuomotorObservationsCfg(ObservationsCfg):
 
 @configclass
 class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
-    """UR5e + Robotiq 2F-85 pick-and-place, IK-relative actions, RGB cameras."""
+    """UR5e pick-and-place, IK-relative arm action + binary suction."""
 
     observations: VisuomotorObservationsCfg = VisuomotorObservationsCfg()
 
@@ -99,15 +95,22 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
 
     image_obs_list = ["table_cam", "wrist_cam"]
 
-    gripper_joint_name: str = UR5E_GRIPPER_JOINT_NAME
-    gripper_open_val: float = UR5E_GRIPPER_OPEN_VAL
-    gripper_close_val: float = UR5E_GRIPPER_CLOSE_VAL
-
     def __post_init__(self):
         super().__post_init__()
 
+        # SurfaceGripper currently requires CPU physics in Isaac Lab 2.3.x.
+        self.device = "cpu"
+
         self.events = EventCfg()
-        self.scene.robot = UR5E_ROBOTIQ_2F_85_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = UR5E_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+
+        self.scene.surface_gripper = SurfaceGripperCfg(
+            prim_path="{ENV_REGEX_NS}/Robot/ee_link/SurfaceGripper",
+            max_grip_distance=0.0075,
+            shear_force_limit=5000.0,
+            coaxial_force_limit=5000.0,
+            retry_interval=0.05,
+        )
 
         self.scene.ee_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Robot/base_link",
@@ -115,9 +118,9 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             visualizer_cfg=self.marker_cfg,
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/tool0",
+                    prim_path="{ENV_REGEX_NS}/Robot/ee_link",
                     name="end_effector",
-                    offset=OffsetCfg(pos=[0.0, 0.0, _TCP_Z_OFFSET]),
+                    offset=OffsetCfg(pos=[_TCP_X_OFFSET, 0.0, 0.0]),
                 ),
             ],
         )
@@ -125,23 +128,22 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=["shoulder_.*_joint", "elbow_joint", "wrist_.*_joint"],
-            body_name="tool0",
+            body_name="ee_link",
             controller=DifferentialIKControllerCfg(
                 command_type="pose", use_relative_mode=True, ik_method="dls"
             ),
             scale=1.0,
-            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, _TCP_Z_OFFSET]),
+            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[_TCP_X_OFFSET, 0.0, 0.0]),
         )
 
-        self.actions.gripper_action = BinaryJointPositionActionCfg(
-            asset_name="robot",
-            joint_names=[self.gripper_joint_name],
-            open_command_expr={self.gripper_joint_name: self.gripper_open_val},
-            close_command_expr={self.gripper_joint_name: self.gripper_close_val},
+        self.actions.gripper_action = SurfaceGripperBinaryActionCfg(
+            asset_name="surface_gripper",
+            open_command=-1.0,
+            close_command=1.0,
         )
 
         self.scene.wrist_cam = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/tool0/wrist_cam",
+            prim_path="{ENV_REGEX_NS}/Robot/ee_link/wrist_cam",
             update_period=0.0,
             height=224,
             width=224,
@@ -153,8 +155,8 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 clipping_range=(0.03, 2.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(0.05, 0.0, 0.0),
-                rot=(0.0, 0.707, 0.707, 0.0),
+                pos=(0.05, 0.0, 0.05),
+                rot=(-0.70614, 0.03701, 0.03701, -0.70614),
                 convention="ros",
             ),
         )

@@ -117,7 +117,6 @@ class ObservationsCfg:
         grasp = ObsTerm(
             func=mdp.object_grasped,
             params={
-                "robot_cfg": SceneEntityCfg("robot"),
                 "ee_frame_cfg": SceneEntityCfg("ee_frame"),
                 "object_cfg": SceneEntityCfg("cube"),
             },
@@ -127,7 +126,6 @@ class ObservationsCfg:
             params={
                 "cube_cfg": SceneEntityCfg("cube"),
                 "target_cfg": SceneEntityCfg("target"),
-                "robot_cfg": SceneEntityCfg("robot"),
             },
         )
 
@@ -152,7 +150,6 @@ class TerminationsCfg:
         params={
             "cube_cfg": SceneEntityCfg("cube"),
             "target_cfg": SceneEntityCfg("target"),
-            "robot_cfg": SceneEntityCfg("robot"),
         },
     )
 
@@ -163,9 +160,6 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
-
-    # Read by mdp helpers via env.cfg.gripper_joint_name.
-    gripper_joint_name: str = "finger_joint"
 
     commands = None
     rewards = None

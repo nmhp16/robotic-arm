@@ -45,7 +45,7 @@ export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
 # Pre-import the task package so its gym.register side-effect runs before
 # record_demos.py looks up the id.
-exec "$ISAACLAB/isaaclab.sh" -p -c "
+exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -c "
 import arm_vla.tasks.ur5_pick_place
 import runpy, sys
 sys.argv = [

@@ -1,9 +1,16 @@
-"""UR5e + Robotiq 2F-85 ArticulationCfg.
+"""UR5e ArticulationCfg with a surface-suction end effector.
 
 Isaac Lab's ``isaaclab_assets.robots.universal_robots`` ships UR10/UR10e
-only. This module mirrors the UR10e + 2F-85 pattern for the UR5e, pointing
-at the UR5e USD on NVIDIA's Nucleus server with the ``Robotiq_2f_85``
-gripper variant. See ``README.md`` for the local-URDF fallback.
+only. This module mirrors the same pattern for the UR5e, pointing at the
+UR5e USD on NVIDIA's Nucleus server. See ``README.md`` for the
+local-URDF fallback.
+
+We use a ``SurfaceGripper`` (suction) attached to ``ee_link`` rather than
+a Robotiq 2F-85 variant. The 2F-85 variant in the UR5e USD spawns a
+nested articulation that Isaac Lab rejects as "multiple articulations
+under one prim"; untangling it requires USD surgery. Suction avoids the
+problem entirely, trades parallel-jaw physics for suction physics, and
+forces CPU sim (see PLAN note).
 """
 
 from __future__ import annotations
@@ -14,11 +21,6 @@ from isaaclab.assets import ArticulationCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 _NUCLEUS_UR5E_USD = f"{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd"
-
-# finger_joint range: 0 rad = fully open, ~0.8 rad = fully closed.
-UR5E_GRIPPER_JOINT_NAME: str = "finger_joint"
-UR5E_GRIPPER_OPEN_VAL: float = 0.0
-UR5E_GRIPPER_CLOSE_VAL: float = 0.8
 
 
 UR5E_CFG = ArticulationCfg(
@@ -71,44 +73,4 @@ UR5E_CFG = ArticulationCfg(
         ),
     },
 )
-"""UR5e arm, no gripper."""
-
-
-UR5E_ROBOTIQ_2F_85_CFG = UR5E_CFG.copy()
-UR5E_ROBOTIQ_2F_85_CFG.spawn.variants = {"Gripper": "Robotiq_2f_85"}
-UR5E_ROBOTIQ_2F_85_CFG.init_state.joint_pos["finger_joint"] = 0.0
-UR5E_ROBOTIQ_2F_85_CFG.init_state.joint_pos[".*_inner_finger_joint"] = 0.0
-UR5E_ROBOTIQ_2F_85_CFG.init_state.joint_pos[".*_inner_finger_knuckle_joint"] = 0.0
-UR5E_ROBOTIQ_2F_85_CFG.init_state.joint_pos[".*_outer_.*_joint"] = 0.0
-
-# finger_joint is the single driving joint; right_outer_knuckle_joint mimics
-# it via the URDF. The two passive entries below close the 2F-85's linkage
-# loop with zero PD so they follow kinematically.
-UR5E_ROBOTIQ_2F_85_CFG.actuators["gripper_drive"] = ImplicitActuatorCfg(
-    joint_names_expr=["finger_joint"],
-    effort_limit_sim=10.0,
-    velocity_limit_sim=1.0,
-    stiffness=11.25,
-    damping=0.1,
-    friction=0.0,
-    armature=0.0,
-)
-UR5E_ROBOTIQ_2F_85_CFG.actuators["gripper_finger"] = ImplicitActuatorCfg(
-    joint_names_expr=[".*_inner_finger_joint"],
-    effort_limit_sim=1.0,
-    velocity_limit_sim=1.0,
-    stiffness=0.2,
-    damping=0.001,
-    friction=0.0,
-    armature=0.0,
-)
-UR5E_ROBOTIQ_2F_85_CFG.actuators["gripper_passive"] = ImplicitActuatorCfg(
-    joint_names_expr=[".*_inner_finger_knuckle_joint", "right_outer_knuckle_joint"],
-    effort_limit_sim=1.0,
-    velocity_limit_sim=1.0,
-    stiffness=0.0,
-    damping=0.0,
-    friction=0.0,
-    armature=0.0,
-)
-"""UR5e arm with Robotiq 2F-85 parallel-jaw gripper."""
+"""UR5e arm, end-effector gripper attached by the env config (not the USD)."""

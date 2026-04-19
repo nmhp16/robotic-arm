@@ -52,6 +52,16 @@ this writing. The training script uses `attn_implementation="sdpa"`.
 ./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
 ```
 
+### Eval failure analysis
+
+`eval.sh` classifies every failed episode into one of
+`collision / grasp_slip / drop / misplacement / drift / other` and writes
+`failure_analysis.json` + a histogram into the run directory. The classifier
+shells out to the `claude` CLI, so it uses your existing Claude Code auth
+(`claude login`) — no `ANTHROPIC_API_KEY` required. If `claude` is not on
+your `PATH`, failures are labeled `other` and classification is skipped.
+Disable entirely with `--no-classify`.
+
 ## Layout
 
 ```

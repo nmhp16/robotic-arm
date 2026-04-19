@@ -43,7 +43,7 @@ mkdir -p "$(dirname "$OUTPUT")"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
-exec "$ISAACLAB/isaaclab.sh" -p -c "
+exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -c "
 import arm_vla.datagen
 import runpy, sys
 sys.argv = [

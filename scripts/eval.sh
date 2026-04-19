@@ -14,4 +14,4 @@ ISAACLAB="${ISAACLAB:-$HOME/IsaacLab}"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
-exec "$ISAACLAB/isaaclab.sh" -p -m arm_vla.eval.rollout "$@"
+exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -m arm_vla.eval.rollout "$@"
