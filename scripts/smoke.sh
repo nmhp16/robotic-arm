@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test the UR10 pick-and-place env under Isaac Lab's bundled python.
+# Smoke test the UR5e pick-and-place env under Isaac Lab's bundled python.
 # Boots headless, steps the env for ~1 s, prints obs shapes, exits.
 set -euo pipefail
 
@@ -14,4 +14,4 @@ cd "$REPO_ROOT"
 # pollute it yet).
 export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
-exec "$ISAACLAB/isaaclab.sh" -p -m arm_vla.tasks.ur10_pick_place.smoke "$@"
+exec "$ISAACLAB/isaaclab.sh" -p -m arm_vla.tasks.ur5_pick_place.smoke "$@"

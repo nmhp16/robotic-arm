@@ -1,6 +1,6 @@
 # arm-vla
 
-OpenVLA fine-tuning pipeline on a UR10 pick-and-place task, sim-only via Isaac Lab.
+OpenVLA fine-tuning pipeline on a UR5e (Robotiq 2F-85) pick-and-place task, sim-only via Isaac Lab.
 
 Full design in [`PLAN.md`](./PLAN.md).
 
@@ -70,7 +70,8 @@ pip install -e ".[ml,dev]"
 
 ```
 src/arm_vla/
-  tasks/ur10_pick_place/   Isaac Lab env
+  assets/ur5e_cfg.py       UR5e + Robotiq 2F-85 ArticulationCfg (not in Isaac Lab)
+  tasks/ur5_pick_place/    Isaac Lab env
   teleop/                  keyboard → HDF5
   datagen/                 mimic config + augmentation
   data/                    HDF5 → RLDS
@@ -78,3 +79,18 @@ src/arm_vla/
   eval/                    sim rollouts
 scripts/                   thin CLI wrappers
 ```
+
+### UR5e USD fallback
+
+`assets/ur5e_cfg.py` points at NVIDIA's Nucleus server for the UR5e USD
+(`{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd`). If that path
+404s on your network, convert the URDF bundled with Isaac Sim instead:
+
+```bash
+mkdir -p assets/ur5e
+~/IsaacLab/isaaclab.sh -p ~/IsaacLab/scripts/tools/convert_urdf.py \
+  ~/isaac/env_isaacsim/lib/python3.12/site-packages/isaacsim/exts/isaacsim.robot_motion.motion_generation/motion_policy_configs/universal_robots/ur5e/ur5e.urdf \
+  assets/ur5e/ur5e.usd
+```
+
+Then edit `_NUCLEUS_UR5E_USD` in `src/arm_vla/assets/ur5e_cfg.py` to a local path.

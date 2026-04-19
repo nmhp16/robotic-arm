@@ -13,7 +13,7 @@
 #   Z/X       roll
 #   T/G       pitch
 #   C/V       yaw
-#   K         toggle gripper (suction on/off)
+#   K         toggle gripper (open/close)
 #   R         reset + discard current episode
 #
 # Flags:
@@ -34,7 +34,7 @@ ISAACLAB="${ISAACLAB:-$HOME/IsaacLab}"
 NUM_DEMOS=15
 STEP_HZ=30
 DATASET="$REPO_ROOT/data/raw/demos.hdf5"
-TASK="Isaac-PickPlace-UR10-IK-Rel-v0"
+TASK="Isaac-PickPlace-UR5-IK-Rel-v0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,7 +56,7 @@ export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 # we get the registration in via a --hydra-style pre-import trick: set
 # PYTHONSTARTUP... no, cleaner: wrap the python invocation ourselves.
 exec "$ISAACLAB/isaaclab.sh" -p -c "
-import arm_vla.tasks.ur10_pick_place  # registers gym id
+import arm_vla.tasks.ur5_pick_place  # registers gym id
 import runpy
 import sys
 sys.argv = [

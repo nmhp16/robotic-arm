@@ -9,9 +9,9 @@
 | Decision | Choice | Rationale |
 |---|---|---|
 | Simulator | Isaac Lab (Isaac Sim under the hood) | Installed; has teleop + mimic + UR assets built in |
-| Robot | UR10 w/ Long Suction gripper | Isaac Lab's `ur10_gripper` stack config uses this — shortest path |
+| Robot | UR5e + Robotiq 2F-85 parallel-jaw | User's target hardware; Robotiq 2F-85 is the standard real-world gripper |
 | Task | Pick single cube → drop in target zone | Simplest pick-and-place; reuses stack env plumbing |
-| Action space | IK-relative 6-DoF pose + binary suction | Matches OpenVLA's 7-DoF action distribution |
+| Action space | IK-relative 6-DoF pose + binary gripper | Matches OpenVLA's 7-DoF action distribution (parallel-jaw, dominant in OXE pretraining) |
 | Cameras | Wrist (224×224 RGB) + third-person (224×224 RGB) | Matches OpenVLA's expected input |
 | Teleop | Keyboard (`Se3KeyboardCfg` — built in) | Only hardware user has |
 | Demo augmentation | `isaaclab_mimic` (curobo-based) | 10–20 teleop demos → 500–1000 augmented; teleop alone isn't enough for VLA fine-tuning |
@@ -24,9 +24,8 @@
 ## Known risks / caveats
 
 - **aarch64 wheels.** PyTorch + transformers have ARM CUDA wheels on DGX Spark. `flash-attn` may need building from source; fallback is `attn_implementation="sdpa"` in the HF config (slower but works).
-- **Suction + CPU sim.** The `UR10_LONG_SUCTION_CFG` currently forces `device="cpu"` in Isaac Lab's stack env. Mimic augmentation will be slower than GPU sim. Acceptable for a few hundred demos.
-- **Action distribution drift.** OpenVLA was pretrained on a mix of Franka/UR/xArm data with parallel-jaw grippers. Our suction gripper is slightly off-distribution. Fine-tuning should bridge the gap but be aware.
-- **Not real-robot.** Everything here is sim. No sim-to-real step in scope.
+- **UR5e USD source.** Isaac Lab doesn't ship a UR5/UR5e `ArticulationCfg`, only UR10/UR10e. We wrote our own (`src/arm_vla/assets/ur5e_cfg.py`) pointing at NVIDIA's Nucleus UR5e USD with the `Robotiq_2f_85` gripper variant. If Nucleus 404s, convert the URDF bundled with Isaac Sim (`~/isaac/.../ur5e.urdf`) — fallback in README.
+- **Not real-robot.** Everything here is sim. No sim-to-real step in scope — the UR5e + 2F-85 choice just keeps the door open for later.
 
 ## Repository layout after cleanup
 
@@ -38,11 +37,14 @@ robotic-arm/
 ├── .gitignore                        # includes venv/, data/, checkpoints/
 │
 ├── src/arm_vla/
+│   ├── assets/
+│   │   └── ur5e_cfg.py               # UR5e + Robotiq 2F-85 ArticulationCfg
 │   ├── tasks/
-│   │   └── ur10_pick_place/          # Isaac Lab env (cloned from ur10_gripper stack)
-│   │       ├── __init__.py           # gym.register("Isaac-PickPlace-UR10-IK-Rel-v0")
-│   │       ├── pick_place_env_cfg.py # base env cfg with IK-rel + cameras + 1 cube + target
-│   │       └── mdp.py                # success = cube in target zone
+│   │   └── ur5_pick_place/           # Isaac Lab env (pattern from ur10_gripper stack)
+│   │       ├── __init__.py           # gym.register("Isaac-PickPlace-UR5-IK-Rel-v0")
+│   │       ├── pick_place_env_cfg.py # base env cfg (scene, obs, terminations)
+│   │       ├── pick_place_ur5_env_cfg.py  # UR5e specifics + cameras + actions
+│   │       └── mdp.py                # success = cube in target zone, parallel-jaw checks
 │   │
 │   ├── teleop/
 │   │   └── collect.py                # keyboard teleop → HDF5 (isaaclab_mimic-compatible)
@@ -96,21 +98,25 @@ Remove anything not on the training path so the repo tells a coherent story.
 - Minimal `README.md` describing the pipeline and pointing at `PLAN.md`
 
 ### Phase 2 — Env scaffolding
-Clone `~/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/manager_based/manipulation/stack/config/ur10_gripper/` into `src/arm_vla/tasks/ur10_pick_place/`. Modify:
-- Scene: 1 cube (not 3) + a visual target zone (colored decal on the table).
-- Observation: add `wrist_cam` and `table_cam` `TiledCameraCfg` at 224×224 RGB, feeding `RGBCameraPolicyCfg`.
-- Termination: `success = cube_in_target_zone(threshold=0.05m)`.
-- Action: keep existing IK-relative 6-DoF + `SurfaceGripperBinaryActionCfg`. That's 7-D total, matching OpenVLA.
-- Events: randomize cube start pose + target zone pose per-episode.
-- Register `Isaac-PickPlace-UR10-IK-Rel-v0` in `__init__.py`.
+Two deliverables:
 
-**Validation:** `python -m arm_vla.tasks.ur10_pick_place.smoke` — spawns env, steps with zero actions for 1 s, no errors.
+1. **`src/arm_vla/assets/ur5e_cfg.py`** — `UR5E_ROBOTIQ_2F_85_CFG`, mirroring Isaac Lab's `UR10e_ROBOTIQ_2F_85_CFG` pattern (Nucleus UR5e USD + `Robotiq_2f_85` variant + PD-tuned actuators for the single driving `finger_joint`).
+
+2. **`src/arm_vla/tasks/ur5_pick_place/`** — task env modeled on the `ur10_gripper` stack config but:
+   - Scene: 1 cube + a kinematic green target pad (not 3 cubes).
+   - Cameras: `wrist_cam` (on `tool0`) + `table_cam` (world-fixed), both 224×224 RGB, feeding `RGBCameraPolicyCfg`.
+   - Termination: `success = cube_in_target_zone` AND gripper open.
+   - Action: IK-relative 6-DoF (`body_name="tool0"`) + `BinaryJointPositionActionCfg` on `finger_joint`. 7-D total.
+   - Events: randomize cube + target start poses per-episode (workspace box tuned for UR5e's ~0.85 m reach).
+   - Register `Isaac-PickPlace-UR5-IK-Rel-v0` in `__init__.py`.
+
+**Validation:** `./scripts/smoke.sh` — spawns env, steps with zero actions for 1 s, no errors.
 
 ### Phase 3 — Teleop + recording
 Wrap `isaaclab.devices.keyboard.Se3Keyboard` into `arm_vla.teleop.collect`. Keyboard maps:
 - `W/S/A/D/Q/E`: ±x, ±y, ±z (translation)
 - `Z/X/C/V/R/F`: ±roll/pitch/yaw
-- `Space`: toggle suction
+- `K`: toggle gripper (open/close)
 - `N`: mark episode success + advance; `B`: discard + retry; `Esc`: quit
 
 Record to `data/raw/demo_XXX.hdf5` with Isaac Lab's native schema so it drops into mimic without reformatting. Target: 15 successful demos.
@@ -144,7 +150,7 @@ Adapt `openvla/vla-scripts/finetune.py`:
 - Save action normalization stats alongside checkpoint (`dataset_statistics.json`) — required for inference unnormalization.
 - Log to wandb (offline mode; user can sync later).
 
-**Output:** `checkpoints/openvla-ur10-pickplace-lora/`.
+**Output:** `checkpoints/openvla-ur5-pickplace-lora/`.
 
 ### Phase 7 — Eval rollout
 `src/arm_vla/eval/rollout.py`:

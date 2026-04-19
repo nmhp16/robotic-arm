@@ -1,8 +1,8 @@
-"""Mimic cfg for UR10 pick-and-place.
+"""Mimic cfg for UR5e pick-and-place.
 
-Combines our ``UR10PickPlaceEnvCfg`` with Isaac Lab's ``MimicEnvCfg`` and wires
-up two subtask configs (grasp cube → place on target). Data generation uses
-curobo motion planning to transplant hand-recorded segments across randomized
+Combines ``UR5PickPlaceEnvCfg`` with Isaac Lab's ``MimicEnvCfg`` and wires
+two subtasks (grasp cube → place on target). Data generation uses curobo
+motion planning to transplant hand-recorded segments across randomized
 scenes, so 15 teleop demos can yield 500+ synthetic ones.
 """
 
@@ -11,26 +11,20 @@ from __future__ import annotations
 from isaaclab.envs.mimic_env_cfg import MimicEnvCfg, SubTaskConfig
 from isaaclab.utils import configclass
 
-from arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg import UR10PickPlaceEnvCfg
+from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
 
 
 @configclass
-class UR10PickPlaceMimicEnvCfg(UR10PickPlaceEnvCfg, MimicEnvCfg):
-    """Mimic-enabled cfg for UR10 pick-and-place.
-
-    Two subtasks:
-      1. ``grasp`` — approach and suction the cube
-      2. final — carry the cube to the target and release (no term signal)
-    """
+class UR5PickPlaceMimicEnvCfg(UR5PickPlaceEnvCfg, MimicEnvCfg):
+    """Mimic-enabled cfg for UR5e pick-and-place."""
 
     def __post_init__(self):
         super().__post_init__()
 
-        # Data-generation knobs. ``generation_relative=True`` means target poses
-        # are re-expressed relative to the object frame at the moment of segment
-        # playback, which is what lets us transplant segments across randomized
-        # scenes.
-        self.datagen_config.name = "ur10_pick_place_mimic_D0"
+        # ``generation_relative=True`` means target poses are re-expressed
+        # relative to the object frame at segment playback, which is what lets
+        # curobo transplant segments across randomized scenes.
+        self.datagen_config.name = "ur5_pick_place_mimic_D0"
         self.datagen_config.generation_guarantee = True
         self.datagen_config.generation_keep_failed = False
         self.datagen_config.generation_num_trials = 10
@@ -45,9 +39,8 @@ class UR10PickPlaceMimicEnvCfg(UR10PickPlaceEnvCfg, MimicEnvCfg):
             SubTaskConfig(
                 object_ref="cube",
                 subtask_term_signal="grasp",
-                # Jitter the grasp/place boundary by 10–20 steps — helps the
-                # augmented demos cover a wider distribution of transition
-                # timings rather than collapsing to one cut point.
+                # 10–20 step jitter on the grasp/place cut keeps the augmented
+                # demos from collapsing to a single transition timing.
                 subtask_term_offset_range=(10, 20),
                 selection_strategy="nearest_neighbor_object",
                 selection_strategy_kwargs={"nn_k": 3},
@@ -60,7 +53,7 @@ class UR10PickPlaceMimicEnvCfg(UR10PickPlaceEnvCfg, MimicEnvCfg):
             ),
             SubTaskConfig(
                 object_ref="target",
-                # Final subtask: no term signal needed (ends at episode end).
+                # Final subtask — no term signal (ends at episode end).
                 subtask_term_signal=None,
                 subtask_term_offset_range=(0, 0),
                 selection_strategy="nearest_neighbor_object",
@@ -72,7 +65,6 @@ class UR10PickPlaceMimicEnvCfg(UR10PickPlaceEnvCfg, MimicEnvCfg):
                 description="Place the cube on the green target",
             ),
         ]
-        # The key here is the eef_name used by the runtime env (first key is
-        # the one ``FrankaCubeStackIKRelMimicEnv.target_eef_pose_to_action``
-        # looks up). We call it "ur10" to stay self-documenting.
-        self.subtask_configs["ur10"] = subtasks
+        # Key is the eef_name used by the runtime env's
+        # ``target_eef_pose_to_action``. "ur5" keeps it self-documenting.
+        self.subtask_configs["ur5"] = subtasks

@@ -10,7 +10,7 @@ model:
 
 data:
   data_root_dir: data/rlds
-  dataset_name: ur10_pick_place
+  dataset_name: ur5_pick_place
   image_aug: true          # random crop + color jitter, helps generalization
   shuffle_buffer_size: 10000
   # Action dims are normalized to [-1, 1] using q01/q99 per-dim; stats are

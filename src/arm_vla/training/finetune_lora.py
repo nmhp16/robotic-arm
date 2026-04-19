@@ -1,4 +1,4 @@
-"""LoRA fine-tune OpenVLA-7B on our UR10 pick-and-place RLDS dataset.
+"""LoRA fine-tune OpenVLA-7B on our UR5e pick-and-place RLDS dataset.
 
 This is a thin, educational driver script. The heavy lifting — the VLA model,
 the RLDS data pipeline, the continuous→discrete action tokenization — is
@@ -39,7 +39,7 @@ import wandb
 @dataclass
 class Config:
     config_path: pathlib.Path = pathlib.Path("src/arm_vla/training/config.yaml")
-    output_dir: pathlib.Path = pathlib.Path("checkpoints/openvla-ur10-pickplace-lora")
+    output_dir: pathlib.Path = pathlib.Path("checkpoints/openvla-ur5-pickplace-lora")
 
 
 def _load_yaml(p: pathlib.Path) -> dict:

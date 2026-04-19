@@ -42,8 +42,8 @@ _STATE_DIM = 8  # eef_pos(3) + eef_quat(4) + gripper(1)
 _ACTION_DIM = 7  # 6-DoF IK-rel + binary gripper
 
 
-class UR10PickPlace(tfds.core.GeneratorBasedBuilder):
-    """OXE-compatible TFDS builder for our UR10 pick-and-place demos."""
+class UR5PickPlace(tfds.core.GeneratorBasedBuilder):
+    """OXE-compatible TFDS builder for our UR5e pick-and-place demos."""
 
     VERSION = tfds.core.Version("1.0.0")
     RELEASE_NOTES = {"1.0.0": "Initial."}
@@ -56,7 +56,7 @@ class UR10PickPlace(tfds.core.GeneratorBasedBuilder):
     def _info(self) -> tfds.core.DatasetInfo:
         return tfds.core.DatasetInfo(
             builder=self,
-            description="UR10 pick-and-place demos (sim, teleop + mimic-augmented).",
+            description="UR5e pick-and-place demos (sim, teleop + mimic-augmented).",
             features=tfds.features.FeaturesDict({
                 "steps": tfds.features.Dataset({
                     "observation": tfds.features.FeaturesDict({
@@ -158,10 +158,10 @@ def _build_cli():
     if not args.input.exists():
         raise SystemExit(f"missing input dataset: {args.input}")
 
-    UR10PickPlace._input_path = str(args.input.resolve())
-    UR10PickPlace._instruction = args.instruction
+    UR5PickPlace._input_path = str(args.input.resolve())
+    UR5PickPlace._instruction = args.instruction
 
-    builder = UR10PickPlace(data_dir=str(args.output))
+    builder = UR5PickPlace(data_dir=str(args.output))
     builder.download_and_prepare()
     info = builder.info
     print(f"built TFDS dataset: {info.full_name} → {args.output}")

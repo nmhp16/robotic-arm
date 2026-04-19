@@ -20,7 +20,7 @@ NUM_DEMOS=500
 INPUT="$REPO_ROOT/data/raw/demos.hdf5"
 OUTPUT="$REPO_ROOT/data/augmented/demos.hdf5"
 NUM_ENVS=4
-TASK="Isaac-PickPlace-UR10-IK-Rel-Mimic-v0"
+TASK="Isaac-PickPlace-UR5-IK-Rel-Mimic-v0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,7 +46,7 @@ export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 # Pre-import our datagen package to register the mimic gym id before
 # generate_dataset.py looks it up.
 exec "$ISAACLAB/isaaclab.sh" -p -c "
-import arm_vla.datagen  # registers Isaac-PickPlace-UR10-IK-Rel-Mimic-v0
+import arm_vla.datagen  # registers Isaac-PickPlace-UR5-IK-Rel-Mimic-v0
 import runpy
 import sys
 sys.argv = [

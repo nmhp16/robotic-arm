@@ -16,7 +16,7 @@ here is just plumbing images in and actions out.
 Runs inside Isaac Lab's bundled python — needs transformers + peft there.
 
     ~/IsaacLab/isaaclab.sh -p -m pip install -e ".[sim]"
-    ./scripts/eval.sh --num-episodes 50 --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
+    ./scripts/eval.sh --num-episodes 50 --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class EvalArgs:
     max_steps_per_episode: int = 400
     instruction: str = "put the blue cube on the green target"
     output_dir: pathlib.Path = pathlib.Path("eval/runs")
-    unnorm_key: str = "ur10_pick_place"
+    unnorm_key: str = "ur5_pick_place"
     record_video: bool = True
 
 
@@ -47,7 +47,7 @@ def _parse_args() -> EvalArgs:
     p.add_argument("--max-steps-per-episode", type=int, default=400)
     p.add_argument("--instruction", type=str, default="put the blue cube on the green target")
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
-    p.add_argument("--unnorm-key", type=str, default="ur10_pick_place")
+    p.add_argument("--unnorm-key", type=str, default="ur5_pick_place")
     p.add_argument("--no-video", action="store_true")
     args = p.parse_args()
     return EvalArgs(
@@ -76,7 +76,7 @@ def main():
         import torch
         from PIL import Image
 
-        import arm_vla.tasks.ur10_pick_place  # noqa: F401  register gym id
+        import arm_vla.tasks.ur5_pick_place  # noqa: F401  register gym id
         from transformers import AutoModelForVision2Seq, AutoProcessor
         from peft import PeftModel
 
@@ -93,8 +93,8 @@ def main():
 
         prompt = f"In: What action should the robot take to {args.instruction}?\nOut:"
 
-        print(f"creating env Isaac-PickPlace-UR10-IK-Rel-v0 (N={args.num_episodes})")
-        env = gym.make("Isaac-PickPlace-UR10-IK-Rel-v0")
+        print(f"creating env Isaac-PickPlace-UR5-IK-Rel-v0 (N={args.num_episodes})")
+        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0")
 
         successes = 0
         results = []

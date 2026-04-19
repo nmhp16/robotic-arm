@@ -1,10 +1,7 @@
-"""Abstract base env cfg for UR10 pick-and-place.
+"""Abstract base env cfg for UR5e + Robotiq 2F-85 pick-and-place.
 
-Defines the scene (table + cube + target + lighting), observation groups, and
-termination terms. Robot, actions, events, and cameras are filled in by the
-concrete subclass (``pick_place_ur10_env_cfg.py``). Matches the structure of
-``isaaclab_tasks.manager_based.manipulation.stack.stack_env_cfg`` so mimic and
-downstream tooling see a familiar shape.
+Defines scene (table + cube + target zone), obs groups, terminations. Robot,
+actions, events, cameras are filled in by ``pick_place_ur5_env_cfg.py``.
 """
 
 from __future__ import annotations
@@ -31,12 +28,6 @@ from . import mdp
 
 @configclass
 class PickPlaceSceneCfg(InteractiveSceneCfg):
-    """Scene: UR10 + table + cube + target zone + ground + dome light.
-
-    ``robot`` and ``ee_frame`` are left MISSING and filled in by the robot-specific
-    subclass.
-    """
-
     robot: ArticulationCfg = MISSING
     ee_frame: FrameTransformerCfg = MISSING
 
@@ -57,7 +48,6 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    # Pick object (standard Isaac blue block USD, known 5 cm cube).
     cube = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Cube",
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.5, 0.0, 0.0203], rot=[1, 0, 0, 0]),
@@ -75,15 +65,14 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         ),
     )
 
-    # Target zone: same block asset (green), kinematic + gravity-disabled so it
-    # stays where we put it on reset and isn't pushed around by the cube.
-    # Randomized pose lives in the events cfg.
+    # Kinematic target pad — kinematic so the cube can rest on it without
+    # pushing it out of place, gravity-disabled so it stays put between resets.
     target = RigidObjectCfg(
         prim_path="{ENV_REGEX_NS}/Target",
         init_state=RigidObjectCfg.InitialStateCfg(pos=[0.6, 0.1, 0.0103], rot=[1, 0, 0, 0]),
         spawn=UsdFileCfg(
             usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/green_block.usd",
-            scale=(1.0, 1.0, 0.2),  # thin pad, not a full cube
+            scale=(1.0, 1.0, 0.2),
             rigid_props=RigidBodyPropertiesCfg(
                 kinematic_enabled=True,
                 disable_gravity=True,
@@ -94,16 +83,12 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
 
 @configclass
 class ActionsCfg:
-    """Set by the robot-specific subclass."""
-
     arm_action: ActionTermCfg = MISSING
     gripper_action: ActionTermCfg = MISSING
 
 
 @configclass
 class ObservationsCfg:
-    """State-only obs. Camera obs are added by the visuomotor subclass."""
-
     @configclass
     class PolicyCfg(ObsGroup):
         actions = ObsTerm(func=mdp.last_action)
@@ -123,21 +108,13 @@ class ObservationsCfg:
 
     @configclass
     class RGBCameraPolicyCfg(ObsGroup):
-        """Populated by visuomotor subclass — left empty here so state-only
-        variants can omit camera rendering entirely."""
-
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False
 
     @configclass
     class SubtaskCfg(ObsGroup):
-        """Subtask annotations for mimic demo augmentation.
-
-        Mimic splits demonstrations into segments at boundaries where these flip
-        from False → True. Two subtasks for pick-and-place: ``grasp`` (cube in
-        gripper) and ``place`` (cube on target).
-        """
+        """Subtask annotations for mimic segmentation."""
 
         grasp = ObsTerm(
             func=mdp.object_grasped,
@@ -152,6 +129,7 @@ class ObservationsCfg:
             params={
                 "cube_cfg": SceneEntityCfg("cube"),
                 "target_cfg": SceneEntityCfg("target"),
+                "robot_cfg": SceneEntityCfg("robot"),
             },
         )
 
@@ -171,7 +149,14 @@ class TerminationsCfg:
         func=mdp.root_height_below_minimum,
         params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("cube")},
     )
-    success = DoneTerm(func=mdp.cube_on_target)
+    success = DoneTerm(
+        func=mdp.cube_on_target,
+        params={
+            "cube_cfg": SceneEntityCfg("cube"),
+            "target_cfg": SceneEntityCfg("target"),
+            "robot_cfg": SceneEntityCfg("robot"),
+        },
+    )
 
 
 @configclass
@@ -181,19 +166,17 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
     actions: ActionsCfg = ActionsCfg()
     terminations: TerminationsCfg = TerminationsCfg()
 
+    # Exposed at cfg level so mdp helpers can read them (``env.cfg.<name>``).
+    # Populated by the concrete subclass (UR5e specifics).
+    gripper_joint_name: str = "finger_joint"
+
     commands = None
-    rewards = None  # pure imitation, no RL reward
-    events = None  # filled by robot-specific subclass
+    rewards = None
+    events = None
     curriculum = None
 
     def __post_init__(self):
         self.decimation = 5
         self.episode_length_s = 20.0
-        self.sim.dt = 0.01  # 100 Hz physics
+        self.sim.dt = 0.01  # 100 Hz
         self.sim.render_interval = 5
-
-        # Bounds needed for the suction gripper physics
-        self.sim.physx.bounce_threshold_velocity = 0.01
-        self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 1024 * 1024 * 4
-        self.sim.physx.gpu_total_aggregate_pairs_capacity = 16 * 1024
-        self.sim.physx.friction_correlation_distance = 0.00625

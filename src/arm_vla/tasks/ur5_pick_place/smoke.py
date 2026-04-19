@@ -1,14 +1,9 @@
-"""Smoke test for the UR10 pick-and-place env.
+"""Smoke test for the UR5e pick-and-place env.
 
-Spawns the env headless, steps with zero actions for ~1 second of sim time,
-and prints observation keys + shapes. No policy, no teleop — just confirms
-the env cfg wires up, all assets load, and observations flow.
+Boots headless, spawns the env, steps with zero actions for ~1 s, prints obs
+keys + shapes, exits. No policy, no teleop — just confirms wiring.
 
-Run inside Isaac Lab's bundled python:
-
-    ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur10_pick_place.smoke
-
-Exits 0 on success, non-zero on any exception.
+    ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur5_pick_place.smoke
 """
 
 from __future__ import annotations
@@ -20,8 +15,6 @@ from isaaclab.app import AppLauncher
 
 
 def _run():
-    # AppLauncher must be constructed before any isaaclab imports that touch
-    # Omniverse — it boots the SimulationApp.
     app = AppLauncher(headless=True)
     simulation_app = app.app
 
@@ -29,14 +22,13 @@ def _run():
         import gymnasium as gym  # noqa: F401
         import torch
 
-        # Register the gym id (side effect of importing the package).
-        import arm_vla.tasks.ur10_pick_place  # noqa: F401
-        from arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg import UR10PickPlaceEnvCfg
+        import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
+        from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
 
-        cfg = UR10PickPlaceEnvCfg()
+        cfg = UR5PickPlaceEnvCfg()
         cfg.scene.num_envs = 1
 
-        env = gym.make("Isaac-PickPlace-UR10-IK-Rel-v0", cfg=cfg)
+        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg)
         try:
             obs, info = env.reset()
             print("=== observation keys / shapes ===")
@@ -49,7 +41,6 @@ def _run():
                     shape = tuple(terms.shape) if hasattr(terms, "shape") else type(terms).__name__
                     print(f"  {group}: {shape}")
 
-            # Zero action — 6-D IK-rel pose + 1-D suction = 7
             action = torch.zeros((1, 7), device=env.unwrapped.device)
             for i in range(20):  # 20 * decimation(5) * dt(0.01) = 1 s
                 env.step(action)
