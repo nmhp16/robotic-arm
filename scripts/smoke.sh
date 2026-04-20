@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sanity check for the UR10 pick-and-place env.
+# Sanity check for the UR5 + Robotiq 2F-85 pick-and-place env.
 #
 # Flags (forwarded to the Python module):
 #   --visible         open the Isaac Sim GUI
@@ -17,4 +17,4 @@ export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 
 # isaaclab.sh defers to $VIRTUAL_ENV/$CONDA_PREFIX if set; unset both so it
 # falls back to the bundled Isaac Sim Python.
-exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -m arm_vla.tasks.ur10_pick_place.smoke "$@"
+exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -m arm_vla.tasks.ur5_pick_place.smoke "$@"

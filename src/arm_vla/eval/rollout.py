@@ -4,7 +4,8 @@ Loads the base model + LoRA adapters, opens the Isaac Lab task env, runs
 N episodes, and writes a summary plus per-episode mp4 videos into
 ``eval/runs/<timestamp>/``.
 
-    ./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
+    ./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
+    ./scripts/eval.sh --checkpoint <ckpt> --task pick_place_ur10
     ./scripts/eval.sh --checkpoint <ckpt> --task stack
 """
 
@@ -24,16 +25,25 @@ from isaaclab.app import AppLauncher
 
 TASK_REGISTRY = {
     "pick_place": {
+        "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
+        "module": "arm_vla.tasks.ur5_pick_place",
+        "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
+        "instruction": "pick up the blue block and place it on the green pad",
+        "unnorm_key": "ur5_pick_place",
+    },
+    "pick_place_ur10": {
         "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
         "module": "arm_vla.tasks.ur10_pick_place",
         "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
         "instruction": "pick up the blue block and place it on the green pad",
+        "unnorm_key": "ur10_pick_place",
     },
     "stack": {
         "gym_id": "Isaac-Stack-UR10-IK-Rel-v0",
         "module": "arm_vla.tasks.ur10_stack",
         "cfg_path": "arm_vla.tasks.ur10_stack.stack_ur10_env_cfg:UR10StackEnvCfg",
         "instruction": "stack the blue block on top of the red block",
+        "unnorm_key": "ur10_pick_place",
     },
 }
 
@@ -46,7 +56,7 @@ class EvalArgs:
     max_steps_per_episode: int = 300
     instruction: str | None = None
     output_dir: pathlib.Path = pathlib.Path("eval/runs")
-    unnorm_key: str = "ur10_pick_place"
+    unnorm_key: str | None = None
     record_video: bool = True
 
 
@@ -58,7 +68,8 @@ def _parse_args() -> EvalArgs:
     p.add_argument("--max-steps-per-episode", type=int, default=300)
     p.add_argument("--instruction", type=str, default=None)
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
-    p.add_argument("--unnorm-key", type=str, default="ur10_pick_place")
+    p.add_argument("--unnorm-key", type=str, default=None,
+                   help="Override the per-task default (which matches the RLDS dataset name)")
     p.add_argument("--no-video", action="store_true")
     args = p.parse_args()
     return EvalArgs(
@@ -77,6 +88,7 @@ def main() -> int:
     args = _parse_args()
     spec = TASK_REGISTRY[args.task]
     instruction = args.instruction or spec["instruction"]
+    unnorm_key = args.unnorm_key or spec["unnorm_key"]
 
     run_dir = args.output_dir / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -140,7 +152,7 @@ def main() -> int:
                 inputs = processor(prompt, Image.fromarray(table)).to("cuda", dtype=torch.bfloat16)
                 with torch.inference_mode():
                     action = vla.predict_action(
-                        **inputs, unnorm_key=args.unnorm_key, do_sample=False
+                        **inputs, unnorm_key=unnorm_key, do_sample=False
                     )
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
@@ -171,7 +183,7 @@ def main() -> int:
         summary = {
             "task": args.task,
             "instruction": instruction,
-            "unnorm_key": args.unnorm_key,
+            "unnorm_key": unnorm_key,
             "num_episodes": args.num_episodes,
             "successes": successes,
             "success_rate": rate,

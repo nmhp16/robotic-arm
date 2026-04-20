@@ -26,7 +26,7 @@ ISAACLAB="${ISAACLAB:-$HOME/IsaacLab}"
 NUM_DEMOS=15
 STEP_HZ=30
 DATASET="$REPO_ROOT/data/raw/demos.hdf5"
-TASK="Isaac-PickPlace-UR10-IK-Rel-v0"
+TASK="Isaac-PickPlace-UR5-IK-Rel-v0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,7 +46,7 @@ export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 # Pre-import the task package so its gym.register side-effect runs before
 # record_demos.py looks up the id.
 exec env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -c "
-import arm_vla.tasks.ur10_pick_place
+import arm_vla.tasks  # registers all gym ids (UR5 + UR10 pick/place + stack)
 import runpy, sys
 sys.argv = [
     'record_demos.py',

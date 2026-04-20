@@ -27,6 +27,12 @@ from isaaclab.app import AppLauncher
 
 TASK_REGISTRY = {
     "pick_place": {
+        "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
+        "module": "arm_vla.tasks.ur5_pick_place",
+        "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
+        "instruction": "pick up the blue block and place it on the green pad",
+    },
+    "pick_place_ur10": {
         "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
         "module": "arm_vla.tasks.ur10_pick_place",
         "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
