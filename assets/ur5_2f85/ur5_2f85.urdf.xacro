@@ -22,7 +22,22 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </xacro:ur_robot>
 
-  <xacro:ur_to_robotiq prefix="$(arg tf_prefix)" connected_to="$(arg tf_prefix)tool0" rotation="0.0"/>
+  <!-- tool0 in this xacro uses REP-103 sensor convention (Z+ "front",
+       perpendicular to the tool axis), which would mount the gripper
+       sideways. We add `tool0_aligned` with the missing rpy="0 -pi/2 pi/2"
+       rotation (originally in robotiq's gripper_side_joint, but commented
+       out upstream) so its Z+ runs along the tool axis. The adapter then
+       attaches to tool0_aligned. Keeping the chain wrist_3→flange→tool0
+       linear (no branching at flange) avoids confusing the URDF importer's
+       articulation tree. -->
+  <link name="tool0_aligned"/>
+  <joint name="tool0_to_aligned" type="fixed">
+    <parent link="tool0"/>
+    <child link="tool0_aligned"/>
+    <origin xyz="0 0 0" rpy="0 ${-pi/2} 0"/>
+  </joint>
+
+  <xacro:ur_to_robotiq prefix="$(arg tf_prefix)" connected_to="$(arg tf_prefix)tool0_aligned" rotation="0.0"/>
 
   <xacro:robotiq_gripper
     name="RobotiqGripperHardwareInterface"

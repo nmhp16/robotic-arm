@@ -29,10 +29,11 @@ from . import events, mdp
 from .pick_place_env_cfg import ObservationsCfg, PickPlaceEnvCfg
 from .robot_cfg import UR5_ROBOTIQ_2F_85_CFG
 
-# tool0 → TCP between fingertips. Sum: ur_to_robotiq adapter (~0.011 m), 2F-85
-# base + finger reach (~0.13 m). Verify with FrameTransformer marker; tweak
-# if grasps land high or low.
-_TCP_Z_OFFSET: float = 0.14
+# tool0_aligned → TCP between fingertips, along z+ (tool axis after our
+# realignment of tool0). Sum: ur_to_robotiq adapter (~0.011 m), 2F-85 base
+# (~0.089 m), finger reach (~0.058 m) ≈ 0.158 m. Verify with the debug
+# FrameTransformer marker and tweak if grasps land high/low.
+_TCP_Z_OFFSET: float = 0.158
 
 # 2F-85 driver joint travel: ~0.0 (open) → ~0.7 rad (fingers parallel-closed
 # on a thin object). Mimic-joint multipliers from the URDF, baked in here so
@@ -134,7 +135,7 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             visualizer_cfg=self.marker_cfg,
             target_frames=[
                 FrameTransformerCfg.FrameCfg(
-                    prim_path="{ENV_REGEX_NS}/Robot/tool0",
+                    prim_path="{ENV_REGEX_NS}/Robot/tool0_aligned",
                     name="end_effector",
                     offset=OffsetCfg(pos=[0.0, 0.0, _TCP_Z_OFFSET]),
                 ),
@@ -146,7 +147,7 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
             joint_names=["shoulder_.*", "elbow_joint", "wrist_.*"],
-            body_name="tool0",
+            body_name="tool0_aligned",
             controller=DifferentialIKControllerCfg(
                 command_type="pose", use_relative_mode=True, ik_method="dls"
             ),
@@ -161,12 +162,12 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             close_command_expr=_GRIPPER_CLOSE_CMD,
         )
 
-        # Wrist cam mounted at the gripper base, looking down the approach
-        # axis. tool0 z+ points "out of the wrist along the tool"; +0.05 m
-        # offset places the cam just above the gripper base. Rotation
-        # ros-convention (w,x,y,z) rotates the cam to look along +z.
+        # Wrist cam mounted on flange (z+ along the tool axis). With
+        # convention="ros" the camera optical frame uses z forward, so
+        # identity quaternion ⇒ optical z = flange z = approach axis.
+        # Placed 10 cm past flange along z+ to clear the gripper body.
         self.scene.wrist_cam = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Robot/tool0/wrist_cam",
+            prim_path="{ENV_REGEX_NS}/Robot/tool0_aligned/wrist_cam",
             update_period=0.0,
             height=224,
             width=224,
@@ -178,8 +179,8 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
                 clipping_range=(0.01, 2.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(0.0, 0.05, 0.05),
-                rot=(0.7071, 0.0, 0.7071, 0.0),
+                pos=(0.05, 0.0, 0.18),
+                rot=(1.0, 0.0, 0.0, 0.0),
                 convention="ros",
             ),
         )
@@ -191,13 +192,13 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
             width=224,
             data_types=["rgb"],
             spawn=sim_utils.PinholeCameraCfg(
-                focal_length=24.0,
+                focal_length=18.0,
                 focus_distance=400.0,
                 horizontal_aperture=20.955,
-                clipping_range=(0.1, 3.0),
+                clipping_range=(0.1, 4.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(1.0, 0.0, 0.5),
+                pos=(1.4, 0.0, 1.0),
                 rot=(0.35355, -0.61237, -0.61237, 0.35355),
                 convention="ros",
             ),
