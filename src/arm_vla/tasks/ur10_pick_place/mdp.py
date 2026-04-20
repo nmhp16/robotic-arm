@@ -16,7 +16,7 @@ from isaaclab.envs.mdp import (  # noqa: F401  re-exported for env cfg
     time_out,
 )
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.sensors import FrameTransformer
+from isaaclab.sensors import Camera, FrameTransformer
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
@@ -55,6 +55,33 @@ def gripper_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
     if state is None:
         return torch.zeros((env.num_envs, 1), device=env.device)
     return state.view(-1, 1)
+
+
+def wrist_center_depth(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("wrist_cam"),
+    window: int = 5,
+) -> torch.Tensor:
+    """Median depth over a small window around the wrist-cam center pixel.
+
+    Returns meters along the camera's forward axis to the nearest surface
+    in view. Invalid/infinite values are clipped to the camera's far plane.
+    Shape (N, 1).
+    """
+    cam: Camera = env.scene[sensor_cfg.name]
+    depth = cam.data.output["distance_to_image_plane"]  # (N, H, W) or (N, H, W, 1)
+    if depth.dim() == 4:
+        depth = depth.squeeze(-1)
+    N, H, W = depth.shape
+    cy, cx = H // 2, W // 2
+    half = max(1, window // 2)
+    patch = depth[:, cy - half : cy + half + 1, cx - half : cx + half + 1]
+    patch = torch.nan_to_num(patch, nan=2.0, posinf=2.0, neginf=2.0)
+    patch = patch.clamp(max=2.0)
+    # Median is robust to stray pixels on thin edges.
+    flat = patch.reshape(N, -1)
+    med = flat.median(dim=1).values
+    return med.view(-1, 1)
 
 
 def cube_position(

@@ -39,10 +39,14 @@ _TCP_X_OFFSET: float = 0.22
 class EventCfg:
     """Reset events: home pose, small joint jitter, randomized cube + target."""
 
+    # Matches Isaac Lab's shipped UR10 + long-suction stack config. Wrist_2
+    # negated from UR10_LONG_SUCTION_CFG's default so the suction approach
+    # axis points down through the table's workspace without flipping
+    # through the wrist singularity during descent.
     init_arm_pose = EventTerm(
         func=franka_stack_events.set_default_joint_pose,
         mode="reset",
-        params={"default_pose": [0.0, -1.5707, 1.5707, -1.5707, 1.5707, 0.0]},
+        params={"default_pose": [0.0, -1.5707, 1.5707, -1.5707, -1.5707, 0.0]},
     )
 
     randomize_joint_state = EventTerm(
@@ -83,6 +87,10 @@ class VisuomotorObservationsCfg(ObservationsCfg):
         wrist_cam = ObsTerm(
             func=mdp.image,
             params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "data_type": "rgb", "normalize": False},
+        )
+        wrist_depth = ObsTerm(
+            func=mdp.wrist_center_depth,
+            params={"sensor_cfg": SceneEntityCfg("wrist_cam"), "window": 5},
         )
 
     policy: PolicyCfg = PolicyCfg()
@@ -141,7 +149,11 @@ class UR10PickPlaceEnvCfg(PickPlaceEnvCfg):
                 command_type="pose", use_relative_mode=True, ik_method="dls"
             ),
             scale=1.0,
-            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[_TCP_X_OFFSET, 0.0, 0.0]),
+            # Matches Isaac Lab's shipped stack IK-rel config for UR10 long
+            # suction: ee_link local -Z points down the tool axis at this
+            # home pose. Using the stack's value keeps the controlled point
+            # and the suction tip aligned.
+            body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, -_TCP_X_OFFSET]),
         )
 
         self.actions.gripper_action = SurfaceGripperBinaryActionCfg(
@@ -150,21 +162,24 @@ class UR10PickPlaceEnvCfg(PickPlaceEnvCfg):
             close_command=1.0,
         )
 
+        # Wrist cam mounted near the suction tip, pointing along the tool
+        # approach axis. Orientation is calibrated for the UR10 long-suction
+        # home pose; expect some drift when the arm is far from home.
         self.scene.wrist_cam = CameraCfg(
             prim_path="{ENV_REGEX_NS}/Robot/ee_link/wrist_cam",
             update_period=0.0,
             height=224,
             width=224,
-            data_types=["rgb"],
+            data_types=["rgb", "distance_to_image_plane"],
             spawn=sim_utils.PinholeCameraCfg(
-                focal_length=18.0,
+                focal_length=14.0,
                 focus_distance=400.0,
                 horizontal_aperture=20.955,
-                clipping_range=(0.03, 2.0),
+                clipping_range=(0.01, 2.0),
             ),
             offset=CameraCfg.OffsetCfg(
-                pos=(0.05, 0.0, 0.05),
-                rot=(-0.70614, 0.03701, 0.03701, -0.70614),
+                pos=(0.30, 0.0, 0.0),
+                rot=(0.7071, 0.0, -0.7071, 0.0),
                 convention="ros",
             ),
         )

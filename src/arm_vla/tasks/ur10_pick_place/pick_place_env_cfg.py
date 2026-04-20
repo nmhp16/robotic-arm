@@ -19,8 +19,10 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, MassPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
+from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
+from isaaclab.sim.spawners.materials.visual_materials_cfg import PreviewSurfaceCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -49,36 +51,8 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    cube = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Cube",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.5, 0.0, 0.0203], rot=[1, 0, 0, 0]),
-        spawn=UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
-            scale=(1.0, 1.0, 1.0),
-            rigid_props=RigidBodyPropertiesCfg(
-                solver_position_iteration_count=16,
-                solver_velocity_iteration_count=1,
-                max_angular_velocity=1000.0,
-                max_linear_velocity=1000.0,
-                max_depenetration_velocity=5.0,
-                disable_gravity=False,
-            ),
-        ),
-    )
-
-    # Kinematic + gravity-disabled so the target pad stays where reset placed it.
-    target = RigidObjectCfg(
-        prim_path="{ENV_REGEX_NS}/Target",
-        init_state=RigidObjectCfg.InitialStateCfg(pos=[0.6, 0.1, 0.0103], rot=[1, 0, 0, 0]),
-        spawn=UsdFileCfg(
-            usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/green_block.usd",
-            scale=(1.0, 1.0, 0.2),
-            rigid_props=RigidBodyPropertiesCfg(
-                kinematic_enabled=True,
-                disable_gravity=True,
-            ),
-        ),
-    )
+    cube: RigidObjectCfg = MISSING
+    target: RigidObjectCfg = MISSING
 
 
 @configclass
@@ -171,3 +145,35 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.dt = 0.01  # 100 Hz
         self.sim.render_interval = 5
+
+        cube_props = RigidBodyPropertiesCfg(
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=1,
+            max_angular_velocity=1000.0,
+            max_linear_velocity=1000.0,
+            max_depenetration_velocity=5.0,
+            disable_gravity=False,
+        )
+
+        self.scene.cube = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/PickCube",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.5, 0.0, 0.0203], rot=[1, 0, 0, 0]),
+            spawn=UsdFileCfg(
+                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
+                scale=(1.0, 1.0, 1.0),
+                rigid_props=cube_props,
+            ),
+        )
+
+        self.scene.target = RigidObjectCfg(
+            prim_path="{ENV_REGEX_NS}/TargetPad",
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.6, 0.1, 0.0050], rot=[1, 0, 0, 0]),
+            spawn=UsdFileCfg(
+                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/green_block.usd",
+                scale=(2.0, 2.0, 0.2),
+                rigid_props=RigidBodyPropertiesCfg(
+                    kinematic_enabled=True,
+                    disable_gravity=True,
+                ),
+            ),
+        )
