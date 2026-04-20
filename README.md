@@ -1,10 +1,14 @@
 # arm-vla
 
-OpenVLA fine-tuning pipeline for a UR10 + long-suction pick-and-place task
+OpenVLA fine-tuning pipeline for UR10 + long-suction pick-and-place tasks
 in Isaac Lab. Sim-only.
 
 Pipeline: keyboard teleop → Isaac Lab Mimic augmentation → RLDS/TFDS →
-OpenVLA LoRA fine-tune → sim rollout eval.
+OpenVLA LoRA fine-tune → sim rollout eval (mp4 per episode).
+
+Two tasks are shipped:
+- `pick_place` — pick the blue cube, place on the green target pad.
+- `stack` — pick the blue cube, stack on top of the red cube.
 
 ## Requirements
 
@@ -17,10 +21,10 @@ OpenVLA LoRA fine-tune → sim rollout eval.
 Two Python environments, separated to keep Isaac Sim's bundled torch from
 clashing with OpenVLA's.
 
-| Env              | Location                          | Used for                                 |
-|------------------|-----------------------------------|------------------------------------------|
-| Isaac Lab python | `~/IsaacLab/isaaclab.sh -p`       | teleop, Mimic augmentation, eval rollout |
-| training venv    | `./.venv`                         | RLDS conversion, OpenVLA LoRA fine-tune  |
+| Env              | Location                          | Used for                                      |
+|------------------|-----------------------------------|-----------------------------------------------|
+| Isaac Lab python | `~/IsaacLab/isaaclab.sh -p`       | teleop, Mimic augmentation, eval, zero-shot   |
+| training venv    | `./.venv`                         | RLDS conversion, OpenVLA LoRA fine-tune       |
 
 ### Training venv
 
@@ -32,8 +36,8 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -e ".[ml,dev]"
 ```
 
-`flash-attn` is intentionally omitted — it does not build on aarch64 as of
-this writing. The training script uses `attn_implementation="sdpa"`.
+`flash-attn` is intentionally omitted — it does not build on aarch64 as
+of this writing. Training uses `attn_implementation="sdpa"`.
 
 ### Isaac Lab env
 
@@ -44,35 +48,38 @@ this writing. The training script uses `attn_implementation="sdpa"`.
 ## Usage
 
 ```bash
-./scripts/smoke.sh                         # sanity-check the env loads
-./scripts/smoke.sh --visible --random --steps 200
-                                           # open GUI, drive the arm
-./scripts/teleop.sh --num-demos 15         # keyboard teleop, record demos
-./scripts/mimic.sh --num-demos 500         # augment via curobo
-./scripts/convert.sh                       # HDF5 → RLDS TFDS
-./scripts/train.sh                         # OpenVLA LoRA fine-tune
-./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
+# scene preview (visible or headless-with-video)
+./scripts/smoke.sh                                # headless sanity check
+./scripts/smoke.sh --visible --random --steps 200 # GUI, random motion
+./scripts/smoke_stack.sh --random --video-out media/stack.mp4  # stack task
+
+# pretrained baseline (no fine-tune, should fail on our robot)
+./scripts/zeroshot.sh --task pick_place --episodes 3
+./scripts/zeroshot.sh --task stack --episodes 3
+
+# full pipeline
+./scripts/teleop.sh --num-demos 15            # keyboard teleop, record HDF5
+./scripts/mimic.sh --num-demos 500            # curobo-based augmentation
+./scripts/convert.sh                          # HDF5 → RLDS TFDS
+./scripts/train.sh                            # OpenVLA LoRA fine-tune
+./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final --task pick_place
+./scripts/eval.sh --checkpoint <ckpt> --task stack
 ```
 
-### Eval failure analysis
-
-`eval.sh` classifies every failed episode into one of
-`collision / grasp_slip / drop / misplacement / drift / other` and writes
-`failure_analysis.json` + a histogram into the run directory. The classifier
-shells out to the `claude` CLI, so it uses your existing Claude Code auth
-(`claude login`) — no `ANTHROPIC_API_KEY` required. If `claude` is not on
-your `PATH`, failures are labeled `other` and classification is skipped.
-Disable entirely with `--no-classify`.
+Eval writes per-episode mp4 videos + `summary.json` into
+`eval/runs/<timestamp>/`.
 
 ## Layout
 
 ```
 src/arm_vla/
-  tasks/ur10_pick_place/     Isaac Lab env (gym id Isaac-PickPlace-UR10-IK-Rel-v0)
+  tasks/ur10_pick_place/     pick-and-place env (gym id Isaac-PickPlace-UR10-IK-Rel-v0)
+  tasks/ur10_stack/          stack env (gym id Isaac-Stack-UR10-IK-Rel-v0)
   datagen/                   Mimic env cfg + runtime
   data/rlds_convert.py       HDF5 → RLDS TFDS builder
   training/                  OpenVLA LoRA fine-tune
   eval/rollout.py            sim rollouts of a fine-tuned checkpoint
+  eval/zeroshot.py           pretrained-baseline rollouts (no LoRA)
 scripts/                     CLI wrappers
 ```
 
@@ -80,25 +87,23 @@ scripts/                     CLI wrappers
 
 - **Isaac Lab rather than raw Isaac Sim.** Mimic, teleop device dispatch,
   and the UR assets are already plumbed through manager-based envs.
-- **UR10 + long suction gripper.** Isaac Lab ships this as a pre-built
-  config (`UR10_LONG_SUCTION_CFG`) whose USD has a pre-authored
-  `SurfaceGripper` schema. The UR5e USD on Nucleus does not, and the
-  Robotiq 2F-85 variant spawns a second articulation under the robot
-  prim that Isaac Lab rejects. UR10 is the shortest working path; the
-  pipeline itself is robot-agnostic and swappable.
+- **UR10 + long suction.** Isaac Lab ships `UR10_LONG_SUCTION_CFG` with a
+  pre-authored `SurfaceGripper` schema — the shortest working path. The
+  UR5e USD does not have the schema and its Robotiq 2F-85 variant spawns
+  a second articulation under the robot prim that Isaac Lab rejects. The
+  pipeline itself is robot-agnostic; swap `UR10_LONG_SUCTION_CFG` for a
+  different arm when one's available.
 - **Two Python environments.** Isaac Lab ships a torch build that does
-  not mix well with OpenVLA's requirements; separating them is cheaper
-  than debugging clashes.
+  not mix well with OpenVLA's pinned requirements; separating them is
+  cheaper than debugging clashes.
 - **Runtime registration with `OXE_DATASET_CONFIGS`** rather than a fork
   of upstream `openvla`. Schema drift surfaces as a `KeyError` at
   data-loader construction.
-- **IK-relative Δpose on `ee_link`, body offset at the suction TCP.**
-  Keeps the action interpretable and matches OpenVLA's training distribution.
 - **Suction gripper forces CPU physics** (`self.device = "cpu"`) as of
-  Isaac Lab 2.3.2. Acceptable for Mimic augmentation and eval; single-
-  env throughput is the bottleneck, not headcount.
+  Isaac Lab 2.3.2. Acceptable for Mimic augmentation (few envs) and
+  single-env eval.
 
 ## Scope
 
-Explicitly out of scope: real-robot transfer, multi-task training,
-training from scratch, hyperparameter sweeps.
+Explicitly out of scope: real-robot transfer, training from scratch,
+hyperparameter sweeps.

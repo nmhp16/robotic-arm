@@ -1,7 +1,7 @@
 [project]
 name = "arm-vla"
 version = "0.1.0"
-description = "OpenVLA fine-tuning pipeline for a UR10 pick-and-place task in Isaac Lab."
+description = "OpenVLA fine-tuning pipeline for UR10 pick-and-place tasks in Isaac Lab."
 requires-python = ">=3.10"
 readme = "README.md"
 
@@ -16,7 +16,10 @@ dependencies = [
 
 [project.optional-dependencies]
 ml = [
-    "transformers>=4.46,<4.50",
+    # OpenVLA is pinned to transformers==4.40.1 / timm<1.0. The runtime
+    # patches in eval/rollout.py + eval/zeroshot.py let it work with newer
+    # transformers, but timm must stay <1.0.
+    "transformers>=4.40,<4.58",
     "accelerate>=1.0",
     "peft>=0.13",
     "datasets>=3.0",
@@ -26,7 +29,7 @@ ml = [
     "tensorflow-graphics",
     "dlimp @ git+https://github.com/kvablack/dlimp@main",
     "wandb>=0.18",
-    "timm>=1.0",
+    "timm>=0.9.10,<1.0",
     "einops>=0.8",
     "rich>=13",
     "openvla @ git+https://github.com/openvla/openvla@main",
@@ -35,10 +38,10 @@ ml = [
 sim = [
     "h5py>=3.10",
     "tensorflow-datasets>=4.9",
-    "transformers>=4.46,<4.50",
+    "transformers>=4.40,<4.58",
     "peft>=0.13",
     "accelerate>=1.0",
-    "timm>=1.0",
+    "timm>=0.9.10,<1.0",
     "pillow>=10",
     "imageio[ffmpeg]>=2.34",
 ]

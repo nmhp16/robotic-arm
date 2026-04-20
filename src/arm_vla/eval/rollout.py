@@ -1,80 +1,105 @@
 """Evaluate a fine-tuned OpenVLA checkpoint via sim rollouts.
 
+Loads the base model + LoRA adapters, opens the Isaac Lab task env, runs
+N episodes, and writes a summary plus per-episode mp4 videos into
+``eval/runs/<timestamp>/``.
+
     ./scripts/eval.sh --checkpoint checkpoints/openvla-ur10-pickplace-lora/final
-
-Loads the base model + LoRA adapters, opens the same Isaac Lab env used for
-data collection, runs N episodes, and writes a summary plus per-episode
-video to ``eval/runs/<timestamp>/``.
-
-By default, the final frame of every failed episode is passed to Claude
-Code (via the ``claude`` CLI) for failure-mode classification. Disable with
-``--no-classify`` or if the ``claude`` binary is not on PATH.
+    ./scripts/eval.sh --checkpoint <ckpt> --task stack
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import pathlib
+import sys
 import time
+import traceback
 from dataclasses import dataclass
 
 from isaaclab.app import AppLauncher
 
 
+TASK_REGISTRY = {
+    "pick_place": {
+        "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
+        "module": "arm_vla.tasks.ur10_pick_place",
+        "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
+        "instruction": "pick up the blue block and place it on the green pad",
+    },
+    "stack": {
+        "gym_id": "Isaac-Stack-UR10-IK-Rel-v0",
+        "module": "arm_vla.tasks.ur10_stack",
+        "cfg_path": "arm_vla.tasks.ur10_stack.stack_ur10_env_cfg:UR10StackEnvCfg",
+        "instruction": "stack the blue block on top of the red block",
+    },
+}
+
+
 @dataclass
 class EvalArgs:
     checkpoint: pathlib.Path
-    num_episodes: int = 50
-    max_steps_per_episode: int = 400
-    instruction: str = "put the blue cube on the green target"
+    task: str = "pick_place"
+    num_episodes: int = 20
+    max_steps_per_episode: int = 300
+    instruction: str | None = None
     output_dir: pathlib.Path = pathlib.Path("eval/runs")
     unnorm_key: str = "ur10_pick_place"
     record_video: bool = True
-    classify_failures: bool = True
 
 
 def _parse_args() -> EvalArgs:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", type=pathlib.Path, required=True)
-    p.add_argument("--num-episodes", type=int, default=50)
-    p.add_argument("--max-steps-per-episode", type=int, default=400)
-    p.add_argument("--instruction", type=str, default="put the blue cube on the green target")
+    p.add_argument("--task", choices=list(TASK_REGISTRY), default="pick_place")
+    p.add_argument("--num-episodes", type=int, default=20)
+    p.add_argument("--max-steps-per-episode", type=int, default=300)
+    p.add_argument("--instruction", type=str, default=None)
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
     p.add_argument("--unnorm-key", type=str, default="ur10_pick_place")
     p.add_argument("--no-video", action="store_true")
-    p.add_argument("--no-classify", action="store_true")
     args = p.parse_args()
     return EvalArgs(
         checkpoint=args.checkpoint,
+        task=args.task,
         num_episodes=args.num_episodes,
         max_steps_per_episode=args.max_steps_per_episode,
         instruction=args.instruction,
         output_dir=args.output_dir,
         unnorm_key=args.unnorm_key,
         record_video=not args.no_video,
-        classify_failures=not args.no_classify,
     )
 
 
-def main() -> None:
+def main() -> int:
     args = _parse_args()
+    spec = TASK_REGISTRY[args.task]
+    instruction = args.instruction or spec["instruction"]
+
     run_dir = args.output_dir / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
-    failure_dir = run_dir / "failures"
 
-    app = AppLauncher(headless=not args.record_video, enable_cameras=True)
-    sim_app = app.app
+    app = AppLauncher(headless=True, enable_cameras=True).app
 
     try:
         import gymnasium as gym
+        import numpy as np  # noqa: F401
         import torch
         from peft import PeftModel
         from PIL import Image
         from transformers import AutoModelForVision2Seq, AutoProcessor
 
-        import arm_vla.tasks.ur10_pick_place  # noqa: F401  registers gym id
-        from arm_vla.eval import failure_analysis
+        importlib.import_module(spec["module"])  # registers gym id
+
+        # Patch OpenVLA class for transformers 4.57+ compatibility.
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+        _vla_cls = get_class_from_dynamic_module(
+            "modeling_prismatic.OpenVLAForActionPrediction", "openvla/openvla-7b"
+        )
+        _vla_cls._supports_sdpa = True
+        _vla_cls._supports_flash_attn_2 = False
 
         processor = AutoProcessor.from_pretrained(str(args.checkpoint), trust_remote_code=True)
         base = AutoModelForVision2Seq.from_pretrained(
@@ -86,37 +111,39 @@ def main() -> None:
         vla = PeftModel.from_pretrained(base, str(args.checkpoint))
         vla.eval()
 
-        prompt = f"In: What action should the robot take to {args.instruction}?\nOut:"
+        cfg_mod_path, cfg_cls = spec["cfg_path"].split(":")
+        cfg_mod = importlib.import_module(cfg_mod_path)
+        cfg = getattr(cfg_mod, cfg_cls)()
+        cfg.scene.num_envs = 1
+        env = gym.make(spec["gym_id"], cfg=cfg)
+        device = env.unwrapped.device
 
-        env = gym.make("Isaac-PickPlace-UR10-IK-Rel-v0")
+        prompt = f"In: What action should the robot take to {instruction}?\nOut:"
+        print(f"task: {args.task}  instruction: {instruction}", flush=True)
+
         successes = 0
-        results = []
-        failure_records: list[dict] = []
+        results: list[dict] = []
+        episode_frames: list[list] = []
 
         for ep in range(args.num_episodes):
             obs, _ = env.reset()
-            frames: list | None = [] if args.record_video else None
+            frames: list = []
             success = False
             steps_to_success: int | None = None
-            last_frame = None
 
             for t in range(args.max_steps_per_episode):
-                img = obs["policy"]["table_cam"][0].cpu().numpy().astype("uint8")
-                last_frame = img
-                inputs = processor(prompt, Image.fromarray(img)).to("cuda", dtype=torch.bfloat16)
+                table = obs["policy"]["table_cam"][0].cpu().numpy().astype("uint8")
+                wrist = obs["policy"]["wrist_cam"][0].cpu().numpy().astype("uint8")
+                import numpy as np
+                frames.append(np.concatenate([table, wrist], axis=1))
 
+                inputs = processor(prompt, Image.fromarray(table)).to("cuda", dtype=torch.bfloat16)
                 with torch.inference_mode():
                     action = vla.predict_action(
                         **inputs, unnorm_key=args.unnorm_key, do_sample=False
                     )
-                action_t = torch.as_tensor(
-                    action, dtype=torch.float32, device=env.unwrapped.device
-                ).unsqueeze(0)
-
+                action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
-
-                if frames is not None and t % 4 == 0:
-                    frames.append(img.copy())
 
                 if bool(terminated[0]) or bool(truncated[0]):
                     term_info = info.get("termination", {}) if isinstance(info, dict) else {}
@@ -132,54 +159,52 @@ def main() -> None:
                 "steps": steps_to_success or args.max_steps_per_episode,
             }
             results.append(entry)
-            print(f"ep {ep:>3d}: {'SUCCESS' if success else 'FAIL':<7}  ({entry['steps']} steps)")
+            print(f"ep {ep:>3d}: {'SUCCESS' if success else 'FAIL':<7}  ({entry['steps']} steps)", flush=True)
 
-            if frames is not None and frames:
-                _save_video(run_dir / f"ep_{ep:03d}.mp4", frames)
+            if args.record_video and frames:
+                _save_video(run_dir / f"ep_{ep:03d}.mp4", frames, fps=15)
+            episode_frames.append(frames)
 
-            if not success and last_frame is not None:
-                failure_dir.mkdir(parents=True, exist_ok=True)
-                frame_path = failure_dir / f"ep_{ep:03d}.png"
-                Image.fromarray(last_frame).save(frame_path)
-
-                record = {"episode": ep, "frame": frame_path.name}
-                if args.classify_failures:
-                    classification = failure_analysis.classify(frame_path, args.instruction)
-                    record.update(classification)
-                    print(f"        → {record.get('failure', 'other')}: {record.get('reason', '')[:80]}")
-                failure_records.append(record)
-
-        env.close()
-
+        # Write summary + optional combined reel BEFORE env.close() —
+        # Isaac Lab's SurfaceGripper cleanup can SIGABRT on shutdown.
         rate = successes / args.num_episodes
         summary = {
+            "task": args.task,
+            "instruction": instruction,
+            "unnorm_key": args.unnorm_key,
             "num_episodes": args.num_episodes,
             "successes": successes,
             "success_rate": rate,
-            "episodes": results,
             "checkpoint": str(args.checkpoint),
-            "instruction": args.instruction,
+            "episodes": results,
         }
-        if failure_records and args.classify_failures:
-            summary["failure_histogram"] = failure_analysis.summarize(failure_records)
-
         with open(run_dir / "summary.json", "w") as f:
             json.dump(summary, f, indent=2)
 
-        if failure_records:
-            with open(run_dir / "failure_analysis.json", "w") as f:
-                json.dump(failure_records, f, indent=2)
+        if args.record_video and episode_frames:
+            all_frames: list = []
+            for i, ep_frames in enumerate(episode_frames):
+                all_frames.extend(ep_frames)
+                if i < len(episode_frames) - 1 and ep_frames:
+                    import numpy as np
+                    all_frames.extend([np.zeros_like(ep_frames[0])] * 8)
+            _save_video(run_dir / "reel.mp4", all_frames, fps=15)
 
-        print(f"\nsuccess rate: {rate:.1%} ({successes}/{args.num_episodes})")
-        if "failure_histogram" in summary:
-            print("failure breakdown:")
-            for label, count in summary["failure_histogram"].items():
-                if count:
-                    print(f"  {label:<14} {count}")
-        print(f"results: {run_dir}")
+        print(f"\nsuccess rate: {rate:.1%} ({successes}/{args.num_episodes})", flush=True)
+        print(f"results: {run_dir}", flush=True)
 
+        try:
+            env.close()
+        except Exception as e:
+            print(f"env.close() raised (ignored): {e}", flush=True)
+
+    except Exception:
+        traceback.print_exc()
+        return 1
     finally:
-        sim_app.close()
+        app.close()
+
+    return 0
 
 
 def _check_success(env) -> bool:
@@ -190,17 +215,17 @@ def _check_success(env) -> bool:
         return False
 
 
-def _save_video(path: pathlib.Path, frames: list) -> None:
+def _save_video(path: pathlib.Path, frames: list, fps: int = 15) -> None:
+    if not frames:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         import imageio
-        imageio.mimsave(str(path), frames, fps=8)
+        imageio.mimsave(str(path), frames, fps=fps)
+        print(f"wrote {path}", flush=True)
     except ImportError:
-        from PIL import Image
-        png_dir = path.with_suffix("")
-        png_dir.mkdir(parents=True, exist_ok=True)
-        for i, fr in enumerate(frames):
-            Image.fromarray(fr).save(png_dir / f"{i:04d}.png")
+        print("imageio missing, skipping video", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
