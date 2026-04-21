@@ -111,7 +111,7 @@ def _episode_from_h5(
 ) -> dict[str, Any]:
     actions = np.asarray(demo["actions"], dtype=np.float32)
     T = actions.shape[0]
-    obs = demo["obs"]["policy"]
+    obs = demo["obs"]
     table_cam = np.asarray(obs["table_cam"], dtype=np.uint8)
     wrist_cam = np.asarray(obs["wrist_cam"], dtype=np.uint8)
     eef_pos = np.asarray(obs["eef_pos"], dtype=np.float32)
