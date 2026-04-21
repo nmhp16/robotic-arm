@@ -19,8 +19,10 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from isaaclab.sim.schemas.schemas_cfg import RigidBodyPropertiesCfg
+from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
+from isaaclab.sim.spawners.materials.visual_materials_cfg import PreviewSurfaceCfg
+from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -153,13 +155,27 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
             disable_gravity=False,
         )
 
+        # Procedurally spawned cube (not the nucleus blue_block.usd) so we
+        # can apply a high-friction physics material. Nucleus USD shipped
+        # cubes don't expose material config through UsdFileCfg. PhysX
+        # default μ ≈ 0.5 isn't enough for the 2F-85 asymmetric closure; at
+        # μ ≈ 2.0 a one-sided grip still holds during lift.
+        cube_material = sim_utils.RigidBodyMaterialCfg(
+            static_friction=2.0,
+            dynamic_friction=1.8,
+            restitution=0.0,
+        )
+
         self.scene.cube = RigidObjectCfg(
             prim_path="{ENV_REGEX_NS}/PickCube",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.0, 0.0203], rot=[1, 0, 0, 0]),
-            spawn=UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/blue_block.usd",
-                scale=(1.0, 1.0, 1.0),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.0, 0.0403], rot=[1, 0, 0, 0]),
+            spawn=CuboidCfg(
+                size=(0.04, 0.04, 0.04),
                 rigid_props=cube_props,
+                collision_props=CollisionPropertiesCfg(collision_enabled=True),
+                physics_material=cube_material,
+                visual_material=PreviewSurfaceCfg(diffuse_color=(0.1, 0.3, 0.9), roughness=0.5),
+                mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
             ),
         )
 

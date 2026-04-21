@@ -21,10 +21,11 @@ from isaaclab.sensors import Camera, FrameTransformer
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-# 2F-85 left_knuckle_joint sweeps ~0 (open) → ~0.7 rad (closed at finger contact).
-# Treat anything past this as "closed" for grasp/place predicates.
-_GRIPPER_CLOSED_THRESHOLD = 0.35
-_DRIVER_JOINT_NAME = "robotiq_85_left_knuckle_joint"
+# Simple prismatic gripper sweeps 0 m (open) → 0.04 m (closed). Use the
+# left finger as the driver observation; threshold at 0.02 m splits the
+# travel in half.
+_GRIPPER_CLOSED_THRESHOLD = 0.02
+_DRIVER_JOINT_NAME = "finger_left_joint"
 
 
 def _gripper_drive_pos(env: ManagerBasedRLEnv) -> torch.Tensor | None:

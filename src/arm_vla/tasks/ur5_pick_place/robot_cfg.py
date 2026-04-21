@@ -1,11 +1,11 @@
-"""ArticulationCfg for the locally converted UR5 + Robotiq 2F-85 USD.
+"""ArticulationCfg for UR5 + simple two-prismatic-finger parallel-jaw gripper.
 
-The USD is built from `assets/ur5_2f85/ur5_2f85.urdf` via
-`scripts/convert_ur5_2f85.py`, which sets
-`convert_mimic_joints_to_normal_joints=True`. PhysX has no native URDF mimic
-support, so we drive all six gripper joints in lockstep from
-`BinaryJointPositionActionCfg` (see `pick_place_ur5_env_cfg.py`) — the
-ArticulationCfg only needs to hold them at zero with stiff actuators.
+The USD is built from ``assets/ur5_simple_gripper/ur5_simple_gripper.urdf``
+via ``scripts/convert_ur5_simple_gripper.py``. The gripper replaces the
+troubled Robotiq 2F-85 model: two independent prismatic joints, no mimic,
+no 4-bar linkage, symmetric closure out of the box. At the controller
+level (binary open/close gripper action) this is identical to a real
+2F-85, so policies fine-tuned here transfer to the physical robot.
 """
 
 from __future__ import annotations
@@ -17,9 +17,9 @@ from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets.articulation import ArticulationCfg
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-_USD_PATH = os.path.join(_REPO_ROOT, "assets", "ur5_2f85", "ur5_2f85.usd")
+_USD_PATH = os.path.join(_REPO_ROOT, "assets", "ur5_simple_gripper", "ur5_simple_gripper.usd")
 
-UR5_ROBOTIQ_2F_85_CFG = ArticulationCfg(
+UR5_SIMPLE_GRIPPER_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         usd_path=_USD_PATH,
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
@@ -41,12 +41,9 @@ UR5_ROBOTIQ_2F_85_CFG = ArticulationCfg(
             "wrist_1_joint": 1.5707963267948966,
             "wrist_2_joint": 0.0,
             "wrist_3_joint": 0.0,
-            "robotiq_85_left_knuckle_joint": 0.0,
-            "robotiq_85_right_knuckle_joint": 0.0,
-            "robotiq_85_left_inner_knuckle_joint": 0.0,
-            "robotiq_85_right_inner_knuckle_joint": 0.0,
-            "robotiq_85_left_finger_tip_joint": 0.0,
-            "robotiq_85_right_finger_tip_joint": 0.0,
+            # Gripper starts fully open (fingers at joint limit 0.0).
+            "finger_left_joint": 0.0,
+            "finger_right_joint": 0.0,
         },
         pos=(0.0, 0.0, 0.0),
         rot=(1.0, 0.0, 0.0, 0.0),
@@ -73,18 +70,18 @@ UR5_ROBOTIQ_2F_85_CFG = ArticulationCfg(
             friction=0.0,
             armature=0.0,
         ),
-        # All six gripper joints driven in lockstep by BinaryJointPositionActionCfg.
-        # PD must be high enough that the action's commanded close position is
-        # actually reached against cube contact; tune if grasps slip.
+        # Both fingers driven by BinaryJointPositionActionCfg with identical
+        # close/open targets — no mimic relationship needed because they're
+        # each directly commanded.
         "gripper": ImplicitActuatorCfg(
-            joint_names_expr=["robotiq_85_.*_joint"],
-            effort_limit_sim=10.0,
-            velocity_limit_sim=2.0,
-            stiffness=50.0,
-            damping=2.0,
+            joint_names_expr=["finger_.*_joint"],
+            effort_limit_sim=50.0,
+            velocity_limit_sim=0.5,
+            stiffness=500.0,
+            damping=30.0,
             friction=0.0,
             armature=0.0,
         ),
     },
 )
-"""UR5 arm + Robotiq 2F-85 parallel-jaw gripper, locally converted USD."""
+"""UR5 arm + simple two-prismatic-finger parallel-jaw gripper."""

@@ -1,9 +1,12 @@
-"""UR5 + Robotiq 2F-85 pick-and-place env, IK-relative actions, RGB cameras.
+"""UR5 + simple two-prismatic-finger gripper pick-and-place env.
 
-Robot is the locally converted USD at ``assets/ur5_2f85/ur5_2f85.usd``
-(see ``scripts/convert_ur5_2f85.py``). All six 2F-85 joints are driven in
-lockstep by ``BinaryJointPositionActionCfg`` with the URDF mimic
-multipliers baked in, since PhysX has no native mimic support.
+Robot is the locally converted USD at
+``assets/ur5_simple_gripper/ur5_simple_gripper.usd`` (see
+``scripts/convert_ur5_simple_gripper.py``). The two prismatic fingers are
+driven by ``BinaryJointPositionActionCfg`` — both joints slide 0→0.04 m
+symmetrically, so there's no mimic/4-bar to synchronize. Kept compatible
+at the controller level (7-D Delta-pose + binary gripper) with a real
+Robotiq 2F-85, so policies fine-tuned here transfer to the physical robot.
 """
 
 from __future__ import annotations
@@ -27,37 +30,22 @@ from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_eve
 
 from . import events, mdp
 from .pick_place_env_cfg import ObservationsCfg, PickPlaceEnvCfg
-from .robot_cfg import UR5_ROBOTIQ_2F_85_CFG
+from .robot_cfg import UR5_SIMPLE_GRIPPER_CFG
 
 # tool0_aligned → TCP between fingertips, along z+ (tool axis after our
-# realignment of tool0). Sum: ur_to_robotiq adapter (~0.011 m), 2F-85 base
-# (~0.089 m), finger reach (~0.058 m) ≈ 0.158 m. Verify with the debug
-# FrameTransformer marker and tweak if grasps land high/low.
-_TCP_Z_OFFSET: float = 0.158
+# realignment of tool0). Sum: gripper base offset (0.02 m) + finger reach
+# (~0.06 m) ≈ 0.08 m. Verify with the FrameTransformer marker and tweak
+# if grasps land high/low.
+_TCP_Z_OFFSET: float = 0.08
 
-# 2F-85 driver joint travel: ~0.0 (open) → ~0.7 rad (fingers parallel-closed
-# on a thin object). Mimic-joint multipliers from the URDF, baked in here so
-# all six joints move together.
-_GRIPPER_OPEN_RAD: float = 0.0
-_GRIPPER_CLOSE_RAD: float = 0.7
-_GRIPPER_JOINTS = [
-    "robotiq_85_left_knuckle_joint",
-    "robotiq_85_right_knuckle_joint",
-    "robotiq_85_left_inner_knuckle_joint",
-    "robotiq_85_right_inner_knuckle_joint",
-    "robotiq_85_left_finger_tip_joint",
-    "robotiq_85_right_finger_tip_joint",
-]
-_GRIPPER_MULTIPLIERS = {
-    "robotiq_85_left_knuckle_joint": 1.0,
-    "robotiq_85_right_knuckle_joint": -1.0,
-    "robotiq_85_left_inner_knuckle_joint": 1.0,
-    "robotiq_85_right_inner_knuckle_joint": -1.0,
-    "robotiq_85_left_finger_tip_joint": -1.0,
-    "robotiq_85_right_finger_tip_joint": 1.0,
-}
-_GRIPPER_OPEN_CMD = {n: _GRIPPER_OPEN_RAD * m for n, m in _GRIPPER_MULTIPLIERS.items()}
-_GRIPPER_CLOSE_CMD = {n: _GRIPPER_CLOSE_RAD * m for n, m in _GRIPPER_MULTIPLIERS.items()}
+# Simple prismatic gripper travel: 0.0 m (fully open) → 0.04 m (fingers
+# touching at the gripper centerline). Both joints commanded identically
+# so closure is symmetric — no mimic relationship to enforce.
+_GRIPPER_OPEN_M: float = 0.0
+_GRIPPER_CLOSE_M: float = 0.04
+_GRIPPER_JOINTS = ["finger_left_joint", "finger_right_joint"]
+_GRIPPER_OPEN_CMD = {n: _GRIPPER_OPEN_M for n in _GRIPPER_JOINTS}
+_GRIPPER_CLOSE_CMD = {n: _GRIPPER_CLOSE_M for n in _GRIPPER_JOINTS}
 
 
 @configclass
@@ -70,21 +58,26 @@ class EventCfg:
         params={"mean": 0.0, "std": 0.02, "asset_cfg": SceneEntityCfg("robot")},
     )
 
+    # Tightened cube range — centered x ∈ [0.40, 0.50], y ∈ [-0.08, 0.08]
+    # keeps the arm's elbow-up IK reliably reachable. Broader ranges hit
+    # reach-envelope edges where TCP descent saturates ~5 cm above cube.
     randomize_cube = EventTerm(
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.35, 0.50), "y": (-0.15, 0.15), "z": (0.0203, 0.0203), "yaw": (-1.0, 1.0)},
+            "pose_range": {"x": (0.40, 0.50), "y": (-0.08, 0.08), "z": (0.0403, 0.0403), "yaw": (-0.5, 0.5)},
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("cube")],
         },
     )
 
+    # Target placed beyond cube x range so they can never spawn overlapped
+    # (would trigger the success termination at t=0, producing junk demos).
     randomize_target = EventTerm(
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.45, 0.65), "y": (-0.20, 0.20), "z": (0.0103, 0.0103), "yaw": (0.0, 0.0)},
+            "pose_range": {"x": (0.55, 0.65), "y": (-0.10, 0.10), "z": (0.0103, 0.0103), "yaw": (0.0, 0.0)},
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("target")],
         },
@@ -127,7 +120,7 @@ class UR5PickPlaceEnvCfg(PickPlaceEnvCfg):
         super().__post_init__()
 
         self.events = EventCfg()
-        self.scene.robot = UR5_ROBOTIQ_2F_85_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = UR5_SIMPLE_GRIPPER_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         self.scene.ee_frame = FrameTransformerCfg(
             prim_path="{ENV_REGEX_NS}/Robot/base_link",
