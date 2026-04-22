@@ -13,39 +13,17 @@ from __future__ import annotations
 
 import argparse
 import importlib
-import json
+import logging
 import pathlib
 import sys
 import time
-import traceback
 from dataclasses import dataclass
 
 from isaaclab.app import AppLauncher
 
+from arm_vla.eval.common import TASK_REGISTRY, save_summary, save_video, setup_logging
 
-TASK_REGISTRY = {
-    "pick_place": {
-        "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur5_pick_place",
-        "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
-        "unnorm_key": "ur5_pick_place",
-    },
-    "pick_place_ur10": {
-        "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_pick_place",
-        "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
-        "unnorm_key": "ur10_pick_place",
-    },
-    "stack": {
-        "gym_id": "Isaac-Stack-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_stack",
-        "cfg_path": "arm_vla.tasks.ur10_stack.stack_ur10_env_cfg:UR10StackEnvCfg",
-        "instruction": "stack the blue block on top of the red block",
-        "unnorm_key": "ur10_pick_place",
-    },
-}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,8 +46,12 @@ def _parse_args() -> EvalArgs:
     p.add_argument("--max-steps-per-episode", type=int, default=300)
     p.add_argument("--instruction", type=str, default=None)
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
-    p.add_argument("--unnorm-key", type=str, default=None,
-                   help="Override the per-task default (which matches the RLDS dataset name)")
+    p.add_argument(
+        "--unnorm-key",
+        type=str,
+        default=None,
+        help="Override the per-task default (which matches the RLDS dataset name)",
+    )
     p.add_argument("--no-video", action="store_true")
     args = p.parse_args()
     return EvalArgs(
@@ -85,6 +67,7 @@ def _parse_args() -> EvalArgs:
 
 
 def main() -> int:
+    setup_logging()
     args = _parse_args()
     spec = TASK_REGISTRY[args.task]
     instruction = args.instruction or spec["instruction"]
@@ -97,7 +80,7 @@ def main() -> int:
 
     try:
         import gymnasium as gym
-        import numpy as np  # noqa: F401
+        import numpy as np
         import torch
         from peft import PeftModel
         from PIL import Image
@@ -131,7 +114,7 @@ def main() -> int:
         device = env.unwrapped.device
 
         prompt = f"In: What action should the robot take to {instruction}?\nOut:"
-        print(f"task: {args.task}  instruction: {instruction}", flush=True)
+        logger.info("task: %s  instruction: %s", args.task, instruction)
 
         successes = 0
         results: list[dict] = []
@@ -146,7 +129,6 @@ def main() -> int:
             for t in range(args.max_steps_per_episode):
                 table = obs["policy"]["table_cam"][0].cpu().numpy().astype("uint8")
                 wrist = obs["policy"]["wrist_cam"][0].cpu().numpy().astype("uint8")
-                import numpy as np
                 frames.append(np.concatenate([table, wrist], axis=1))
 
                 inputs = processor(prompt, Image.fromarray(table)).to("cuda", dtype=torch.bfloat16)
@@ -171,10 +153,15 @@ def main() -> int:
                 "steps": steps_to_success or args.max_steps_per_episode,
             }
             results.append(entry)
-            print(f"ep {ep:>3d}: {'SUCCESS' if success else 'FAIL':<7}  ({entry['steps']} steps)", flush=True)
+            logger.info(
+                "ep %3d: %-7s  (%d steps)",
+                ep,
+                "SUCCESS" if success else "FAIL",
+                entry["steps"],
+            )
 
             if args.record_video and frames:
-                _save_video(run_dir / f"ep_{ep:03d}.mp4", frames, fps=15)
+                save_video(run_dir / f"ep_{ep:03d}.mp4", frames, fps=15)
             episode_frames.append(frames)
 
         # Write summary + optional combined reel BEFORE env.close() —
@@ -190,28 +177,34 @@ def main() -> int:
             "checkpoint": str(args.checkpoint),
             "episodes": results,
         }
-        with open(run_dir / "summary.json", "w") as f:
-            json.dump(summary, f, indent=2)
+        save_summary(run_dir / "summary.json", summary)
 
         if args.record_video and episode_frames:
             all_frames: list = []
             for i, ep_frames in enumerate(episode_frames):
                 all_frames.extend(ep_frames)
                 if i < len(episode_frames) - 1 and ep_frames:
-                    import numpy as np
                     all_frames.extend([np.zeros_like(ep_frames[0])] * 8)
-            _save_video(run_dir / "reel.mp4", all_frames, fps=15)
+            save_video(run_dir / "reel.mp4", all_frames, fps=15)
 
-        print(f"\nsuccess rate: {rate:.1%} ({successes}/{args.num_episodes})", flush=True)
-        print(f"results: {run_dir}", flush=True)
+        logger.info(
+            "success rate: %.1f%% (%d/%d)",
+            rate * 100,
+            successes,
+            args.num_episodes,
+        )
+        logger.info("results: %s", run_dir)
 
         try:
             env.close()
-        except Exception as e:
-            print(f"env.close() raised (ignored): {e}", flush=True)
+        except (RuntimeError, AttributeError, AssertionError):
+            # Isaac Lab SurfaceGripper + PhysX teardown ordering can raise
+            # here; the simulation is already shutting down so it's safe
+            # to swallow. SIGABRT can still happen and is uncatchable.
+            logger.warning("env.close() raised during teardown (ignored)", exc_info=True)
 
     except Exception:
-        traceback.print_exc()
+        logger.exception("rollout failed")
         return 1
     finally:
         app.close()
@@ -223,20 +216,8 @@ def _check_success(env) -> bool:
     try:
         term = env.unwrapped.cfg.terminations.success
         return bool(term.func(env.unwrapped, **term.params)[0])
-    except Exception:
+    except (AttributeError, KeyError, IndexError, TypeError):
         return False
-
-
-def _save_video(path: pathlib.Path, frames: list, fps: int = 15) -> None:
-    if not frames:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import imageio
-        imageio.mimsave(str(path), frames, fps=fps)
-        print(f"wrote {path}", flush=True)
-    except ImportError:
-        print("imageio missing, skipping video", file=sys.stderr)
 
 
 if __name__ == "__main__":

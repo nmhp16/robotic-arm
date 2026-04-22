@@ -11,24 +11,39 @@ a standard HF + peft training loop.
 
 from __future__ import annotations
 
-import json
+import logging
+import os
 import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import draccus
 import numpy as np
 import torch
+import wandb
 import yaml
 from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
-import wandb
+logger = logging.getLogger(__name__)
+
+_DEFAULT_CONFIG_PATH = "src/arm_vla/training/config.yaml"
+_DEFAULT_OUTPUT_DIR = "checkpoints/openvla-ur5-pickplace-lora"
+
+
+def _env_path(name: str, fallback: str) -> pathlib.Path:
+    return pathlib.Path(os.environ.get(name, fallback))
 
 
 @dataclass
 class Config:
-    config_path: pathlib.Path = pathlib.Path("src/arm_vla/training/config.yaml")
-    output_dir: pathlib.Path = pathlib.Path("checkpoints/openvla-ur5-pickplace-lora")
+    # Override via CLI (--config-path) or env (ARM_VLA_TRAIN_CONFIG).
+    config_path: pathlib.Path = field(
+        default_factory=lambda: _env_path("ARM_VLA_TRAIN_CONFIG", _DEFAULT_CONFIG_PATH)
+    )
+    # Override via CLI (--output-dir) or env (ARM_VLA_CHECKPOINT_DIR).
+    output_dir: pathlib.Path = field(
+        default_factory=lambda: _env_path("ARM_VLA_CHECKPOINT_DIR", _DEFAULT_OUTPUT_DIR)
+    )
 
 
 def _load_yaml(path: pathlib.Path) -> dict:
@@ -81,16 +96,30 @@ def _compute_action_stats(data_root_dir: pathlib.Path, dataset_name: str) -> dic
     }
 
 
+# Cosine schedule decays LR from 1.0 to _LR_MIN_FRAC of peak, not to 0 —
+# matches OpenVLA's reference finetune config and avoids vanishing-gradient
+# behavior in the tail.
+_LR_MIN_FRAC: float = 0.1
+
+
 def _cosine_schedule(warmup: int, total: int):
+    span = 1.0 - _LR_MIN_FRAC
+
     def fn(step: int) -> float:
         if step < warmup:
             return step / max(1, warmup)
         progress = (step - warmup) / max(1, total - warmup)
-        return 0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * min(progress, 1.0)))
+        return _LR_MIN_FRAC + span * 0.5 * (1 + np.cos(np.pi * min(progress, 1.0)))
+
     return fn
 
 
 def main(cfg: Config) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     yaml_cfg = _load_yaml(cfg.config_path)
     data_cfg = yaml_cfg["data"]
     model_cfg = yaml_cfg["model"]
@@ -105,8 +134,6 @@ def main(cfg: Config) -> None:
 
     stats = _compute_action_stats(data_root_dir, dataset_name)
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
-    with open(cfg.output_dir / "dataset_statistics.json", "w") as f:
-        json.dump({dataset_name: {"action": stats}}, f, indent=2)
 
     processor = AutoProcessor.from_pretrained(model_cfg["vla_path"], trust_remote_code=True)
     model = AutoModelForVision2Seq.from_pretrained(
@@ -178,7 +205,12 @@ def main(cfg: Config) -> None:
             optim.zero_grad()
 
         if step % train_cfg["log_every"] == 0:
-            print(f"step {step:>6d}  loss={loss.item() * grad_accum:.4f}  lr={scheduler.get_last_lr()[0]:.2e}")
+            logger.info(
+                "step %6d  loss=%.4f  lr=%.2e",
+                step,
+                loss.item() * grad_accum,
+                scheduler.get_last_lr()[0],
+            )
             if wb_cfg["enabled"]:
                 wandb.log(
                     {"loss": loss.item() * grad_accum, "lr": scheduler.get_last_lr()[0]},

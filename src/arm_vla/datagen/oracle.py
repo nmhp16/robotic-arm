@@ -22,13 +22,15 @@ State machine per episode:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import pathlib
 import sys
-import traceback
 from enum import Enum
 
 from isaaclab.app import AppLauncher
+
+logger = logging.getLogger(__name__)
 
 
 # Waypoint geometry (meters). Blue block is 4 cm cube with centroid ~2 cm
@@ -83,15 +85,18 @@ def _parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     args = _parse_args()
 
     app = AppLauncher(headless=True, enable_cameras=True).app
 
     try:
         import gymnasium as gym
-        import numpy as np
         import torch
-
         from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
         from isaaclab.managers.recorder_manager import DatasetExportMode
 
@@ -115,7 +120,6 @@ def main() -> int:
         env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg).unwrapped
         device = env.device
 
-        success_term = cfg.terminations.success
         exported = 0
         episode_idx = 0
 
@@ -130,7 +134,6 @@ def main() -> int:
 
             phase = Phase.HOVER
             hold_counter = 0
-            success_step_count = 0
             succeeded = False
 
             prev_phase = None
@@ -163,13 +166,13 @@ def main() -> int:
                 action = _compute_action(tcp, wp_pos, gripper_open)
 
                 if phase is not prev_phase or step % 5 == 0:
-                    print(
-                        f"  ep{episode_idx:>2d} t{step:>3d} {phase.name:<7s} "
-                        f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
-                        f"cube=[{cube_now[0]:+.3f},{cube_now[1]:+.3f},{cube_now[2]:+.3f}] "
-                        f"act_grip={action[6]:+.1f} obs_grip={gripper_rad:.2f} "
-                        f"reached={reached}",
-                        flush=True,
+                    logger.info(
+                        "  ep%2d t%3d %-7s tcp=[%+.3f,%+.3f,%+.3f] "
+                        "cube=[%+.3f,%+.3f,%+.3f] act_grip=%+.1f obs_grip=%.2f reached=%s",
+                        episode_idx, step, phase.name,
+                        tcp[0], tcp[1], tcp[2],
+                        cube_now[0], cube_now[1], cube_now[2],
+                        action[6], gripper_rad, reached,
                     )
                 prev_phase = phase
 
@@ -208,28 +211,26 @@ def main() -> int:
                         name: bool(tm.get_term(name)[0])
                         for name in tm.active_terms
                     }
-                    print(
-                        f"  ep{episode_idx:>2d} ENDED at t={step} phase={phase.name} "
-                        f"flags={flags}",
-                        flush=True,
+                    logger.info(
+                        "  ep%2d ENDED at t=%d phase=%s flags=%s",
+                        episode_idx, step, phase.name, flags,
                     )
                     break
 
             tag = "SUCCESS" if succeeded else "FAIL"
-            print(
-                f"episode {episode_idx:>3d}: {tag:<7s} "
-                f"({exported}/{args.num_demos} exported, final phase={phase.name})",
-                flush=True,
+            logger.info(
+                "episode %3d: %-7s (%d/%d exported, final phase=%s)",
+                episode_idx, tag, exported, args.num_demos, phase.name,
             )
 
-        print(f"\nwrote {exported} successful episodes to {args.dataset_file}", flush=True)
+        logger.info("wrote %d successful episodes to %s", exported, args.dataset_file)
         try:
             env.close()
-        except Exception as close_exc:
-            print(f"env.close() raised (ignored): {close_exc}", flush=True)
+        except (RuntimeError, AttributeError, AssertionError):
+            logger.warning("env.close() raised during teardown (ignored)", exc_info=True)
 
     except Exception:
-        traceback.print_exc()
+        logger.exception("oracle demo collection failed")
         return 1
     finally:
         app.close()

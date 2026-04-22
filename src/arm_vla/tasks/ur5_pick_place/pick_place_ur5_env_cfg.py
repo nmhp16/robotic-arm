@@ -47,6 +47,24 @@ _GRIPPER_JOINTS = ["finger_left_joint", "finger_right_joint"]
 _GRIPPER_OPEN_CMD = {n: _GRIPPER_OPEN_M for n in _GRIPPER_JOINTS}
 _GRIPPER_CLOSE_CMD = {n: _GRIPPER_CLOSE_M for n in _GRIPPER_JOINTS}
 
+# Cube spawn range — tuned to keep the arm's elbow-up IK reliably
+# reachable. Broader XY hits reach-envelope edges where TCP descent
+# saturates ~5 cm above the cube.
+_CUBE_X_RANGE: tuple[float, float] = (0.40, 0.50)
+_CUBE_Y_RANGE: tuple[float, float] = (-0.08, 0.08)
+_CUBE_Z: float = 0.0403                 # 4 cm cube resting on table (z=0)
+_CUBE_YAW_RANGE: tuple[float, float] = (-0.5, 0.5)
+
+# Target spawn range — x > _CUBE_X_RANGE.max so cube and target never
+# spawn overlapped (would fire the success termination at t=0 and
+# produce junk demos).
+_TARGET_X_RANGE: tuple[float, float] = (0.55, 0.65)
+_TARGET_Y_RANGE: tuple[float, float] = (-0.10, 0.10)
+_TARGET_Z: float = 0.0103               # flat pad thickness on table
+
+# Arm joint reset jitter (radians).
+_ARM_JITTER_STD: float = 0.02
+
 
 @configclass
 class EventCfg:
@@ -55,29 +73,34 @@ class EventCfg:
     randomize_joint_state = EventTerm(
         func=events.randomize_arm_joints_by_gaussian_offset,
         mode="reset",
-        params={"mean": 0.0, "std": 0.02, "asset_cfg": SceneEntityCfg("robot")},
+        params={"mean": 0.0, "std": _ARM_JITTER_STD, "asset_cfg": SceneEntityCfg("robot")},
     )
 
-    # Tightened cube range — centered x ∈ [0.40, 0.50], y ∈ [-0.08, 0.08]
-    # keeps the arm's elbow-up IK reliably reachable. Broader ranges hit
-    # reach-envelope edges where TCP descent saturates ~5 cm above cube.
     randomize_cube = EventTerm(
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.40, 0.50), "y": (-0.08, 0.08), "z": (0.0403, 0.0403), "yaw": (-0.5, 0.5)},
+            "pose_range": {
+                "x": _CUBE_X_RANGE,
+                "y": _CUBE_Y_RANGE,
+                "z": (_CUBE_Z, _CUBE_Z),
+                "yaw": _CUBE_YAW_RANGE,
+            },
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("cube")],
         },
     )
 
-    # Target placed beyond cube x range so they can never spawn overlapped
-    # (would trigger the success termination at t=0, producing junk demos).
     randomize_target = EventTerm(
         func=franka_stack_events.randomize_object_pose,
         mode="reset",
         params={
-            "pose_range": {"x": (0.55, 0.65), "y": (-0.10, 0.10), "z": (0.0103, 0.0103), "yaw": (0.0, 0.0)},
+            "pose_range": {
+                "x": _TARGET_X_RANGE,
+                "y": _TARGET_Y_RANGE,
+                "z": (_TARGET_Z, _TARGET_Z),
+                "yaw": (0.0, 0.0),
+            },
             "min_separation": 0.0,
             "asset_cfgs": [SceneEntityCfg("target")],
         },

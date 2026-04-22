@@ -15,36 +15,17 @@ The point is to characterize the baseline before fine-tuning.
 from __future__ import annotations
 
 import argparse
-import json
+import importlib
+import logging
 import pathlib
 import sys
-import time
-import traceback
 from dataclasses import dataclass
 
 from isaaclab.app import AppLauncher
 
+from arm_vla.eval.common import TASK_REGISTRY, save_summary, save_video, setup_logging
 
-TASK_REGISTRY = {
-    "pick_place": {
-        "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur5_pick_place",
-        "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
-    },
-    "pick_place_ur10": {
-        "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_pick_place",
-        "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
-    },
-    "stack": {
-        "gym_id": "Isaac-Stack-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_stack",
-        "cfg_path": "arm_vla.tasks.ur10_stack.stack_ur10_env_cfg:UR10StackEnvCfg",
-        "instruction": "stack the blue block on top of the red block",
-    },
-}
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,6 +59,7 @@ def _parse_args() -> Args:
 
 
 def main() -> int:
+    setup_logging()
     args = _parse_args()
     spec = TASK_REGISTRY[args.task]
 
@@ -85,7 +67,6 @@ def main() -> int:
 
     try:
         import gymnasium as gym
-        import importlib
         import numpy as np
         import torch
         from PIL import Image
@@ -93,7 +74,7 @@ def main() -> int:
 
         importlib.import_module(spec["module"])  # registers gym id
 
-        print(f"loading openvla/openvla-7b (first run downloads ~14 GB)", flush=True)
+        logger.info("loading openvla/openvla-7b (first run downloads ~14 GB)")
         processor = AutoProcessor.from_pretrained("openvla/openvla-7b", trust_remote_code=True)
 
         # transformers 4.57+ expects every HF model class to declare
@@ -117,7 +98,7 @@ def main() -> int:
         vla.eval()
 
         prompt = f"In: What action should the robot take to {spec['instruction']}?\nOut:"
-        print(f"task: {args.task}  instruction: {spec['instruction']}", flush=True)
+        logger.info("task: %s  instruction: %s", args.task, spec["instruction"])
 
         cfg_mod_path, cfg_cls = spec["cfg_path"].split(":")
         cfg_mod = importlib.import_module(cfg_mod_path)
@@ -152,11 +133,11 @@ def main() -> int:
                 if t % 10 == 0:
                     a = [float(v) for v in action]
                     eef = obs["policy"]["eef_pos"][0].cpu().numpy()
-                    print(
-                        f"    t={t:>3d}  action=[{a[0]:+.3f},{a[1]:+.3f},{a[2]:+.3f} | "
-                        f"{a[3]:+.2f},{a[4]:+.2f},{a[5]:+.2f} | grip={a[6]:+.1f}]  "
-                        f"tcp=[{eef[0]:.3f},{eef[1]:.3f},{eef[2]:.3f}]",
-                        flush=True,
+                    logger.info(
+                        "    t=%3d  action=[%+.3f,%+.3f,%+.3f | %+.2f,%+.2f,%+.2f | grip=%+.1f]"
+                        "  tcp=[%.3f,%.3f,%.3f]",
+                        t, a[0], a[1], a[2], a[3], a[4], a[5], a[6],
+                        eef[0], eef[1], eef[2],
                     )
 
                 obs, _, terminated, truncated, info = env.step(action_t)
@@ -168,7 +149,12 @@ def main() -> int:
                         success = True
                     break
 
-            print(f"  episode {ep}: {'SUCCESS' if success else 'FAIL':<7}  ({steps} steps)", flush=True)
+            logger.info(
+                "  episode %d: %-7s  (%d steps)",
+                ep,
+                "SUCCESS" if success else "FAIL",
+                steps,
+            )
             summary.append({"episode": ep, "success": success, "steps": steps})
             all_frames.extend(ep_frames)
             # Separator frame between episodes (black)
@@ -178,46 +164,41 @@ def main() -> int:
 
         # Save video + JSON BEFORE env.close() — the close teardown can
         # SIGABRT on Isaac Lab's SurfaceGripper cleanup and lose everything.
-        _save_video(args.out, all_frames, args.fps)
-        with open(args.out.with_suffix(".json"), "w") as f:
-            json.dump(
-                {
-                    "task": args.task,
-                    "instruction": spec["instruction"],
-                    "unnorm_key": args.unnorm_key,
-                    "episodes": summary,
-                    "success_rate": sum(e["success"] for e in summary) / max(1, len(summary)),
-                },
-                f,
-                indent=2,
-            )
+        save_video(args.out, all_frames, args.fps)
         rate = sum(e["success"] for e in summary) / max(1, len(summary))
-        print(f"\nzero-shot success rate on {args.task}: {rate:.0%} ({sum(e['success'] for e in summary)}/{len(summary)})", flush=True)
+        save_summary(
+            args.out.with_suffix(".json"),
+            {
+                "task": args.task,
+                "instruction": spec["instruction"],
+                "unnorm_key": args.unnorm_key,
+                "episodes": summary,
+                "success_rate": rate,
+            },
+        )
+        logger.info(
+            "zero-shot success rate on %s: %.0f%% (%d/%d)",
+            args.task,
+            rate * 100,
+            sum(e["success"] for e in summary),
+            len(summary),
+        )
 
         try:
             env.close()
-        except Exception as e:
-            print(f"env.close() raised (ignored): {e}", flush=True)
+        except (RuntimeError, AttributeError, AssertionError):
+            # Isaac Lab SurfaceGripper + PhysX teardown ordering can raise
+            # here; simulation is already shutting down so it's safe to
+            # swallow. SIGABRT can still happen and is uncatchable.
+            logger.warning("env.close() raised during teardown (ignored)", exc_info=True)
 
     except Exception:
-        traceback.print_exc()
+        logger.exception("zeroshot eval failed")
         return 1
     finally:
         app.close()
 
     return 0
-
-
-def _save_video(path: pathlib.Path, frames: list, fps: int) -> None:
-    if not frames:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        import imageio
-        imageio.mimsave(str(path), frames, fps=fps)
-        print(f"wrote {path} ({len(frames)} frames @ {fps} fps)")
-    except ImportError:
-        print("imageio missing, skipping video", file=sys.stderr)
 
 
 if __name__ == "__main__":

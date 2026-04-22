@@ -11,6 +11,7 @@ Run with:
 
 from __future__ import annotations
 
+import logging
 import os
 
 from isaaclab.app import AppLauncher
@@ -20,6 +21,8 @@ _simulation_app = _app_launcher.app
 
 from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 URDF_PATH = os.path.join(REPO_ROOT, "assets", "ur5_2f85", "ur5_2f85.urdf")
 USD_DIR = os.path.join(REPO_ROOT, "assets", "ur5_2f85")
@@ -27,6 +30,11 @@ USD_NAME = "ur5_2f85.usd"
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     cfg = UrdfConverterCfg(
         asset_path=URDF_PATH,
         usd_dir=USD_DIR,
@@ -44,7 +52,7 @@ def main() -> None:
         ),
     )
     converter = UrdfConverter(cfg)
-    print(f"USD written to: {converter.usd_path}")
+    logger.info("USD written to: %s", converter.usd_path)
 
 
 if __name__ == "__main__":

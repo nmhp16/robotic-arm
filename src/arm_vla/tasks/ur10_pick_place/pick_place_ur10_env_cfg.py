@@ -18,7 +18,6 @@ from isaaclab.envs.mdp.actions.actions_cfg import (
     SurfaceGripperBinaryActionCfg,
 )
 from isaaclab.managers import EventTermCfg as EventTerm
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG

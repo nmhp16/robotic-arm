@@ -25,13 +25,17 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import logging
 import pathlib
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import h5py
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_INSTRUCTION = "put the blue cube on the green target"
 _IMG_H, _IMG_W = 224, 224
@@ -142,6 +146,11 @@ def _episode_from_h5(
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=pathlib.Path, default=pathlib.Path("data/augmented/demos.hdf5"))
     p.add_argument("--output", type=pathlib.Path, default=pathlib.Path("data/rlds"))
@@ -157,10 +166,10 @@ def main() -> None:
     builder = Ur5PickPlace(data_dir=str(args.output))
     builder.download_and_prepare()
     info = builder.info
-    print(f"built {info.full_name} at {args.output}")
-    print(f"  train: {info.splits['train'].num_examples} episodes")
+    logger.info("built %s at %s", info.full_name, args.output)
+    logger.info("  train: %d episodes", info.splits["train"].num_examples)
     if "val" in info.splits:
-        print(f"  val:   {info.splits['val'].num_examples} episodes")
+        logger.info("  val:   %d episodes", info.splits["val"].num_examples)
 
 
 if __name__ == "__main__":

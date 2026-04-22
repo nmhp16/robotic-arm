@@ -6,11 +6,13 @@ Same pattern as ur10_pick_place.smoke, but spawns the stacking env.
 from __future__ import annotations
 
 import argparse
+import logging
 import pathlib
 import sys
-import traceback
 
 from isaaclab.app import AppLauncher
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -25,6 +27,11 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _run(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     app = AppLauncher(headless=not args.visible, enable_cameras=True)
     simulation_app = app.app
 
@@ -42,15 +49,15 @@ def _run(args: argparse.Namespace) -> int:
         env = gym.make("Isaac-Stack-UR10-IK-Rel-v0", cfg=cfg)
         try:
             obs, _ = env.reset()
-            print("observation shapes:", flush=True)
+            logger.info("observation shapes:")
             for group, terms in obs.items():
                 if isinstance(terms, dict):
                     for name, val in terms.items():
                         shape = tuple(val.shape) if hasattr(val, "shape") else type(val).__name__
-                        print(f"  {group}.{name}: {shape}", flush=True)
+                        logger.info("  %s.%s: %s", group, name, shape)
                 else:
                     shape = tuple(terms.shape) if hasattr(terms, "shape") else type(terms).__name__
-                    print(f"  {group}: {shape}", flush=True)
+                    logger.info("  %s: %s", group, shape)
 
             device = env.unwrapped.device
             rng = np.random.default_rng(0)
@@ -73,7 +80,7 @@ def _run(args: argparse.Namespace) -> int:
                     table_frames.append(_grab(obs, "table_cam"))
                     wrist_frames.append(_grab(obs, "wrist_cam"))
 
-            print(f"stepped {args.steps} times, env alive", flush=True)
+            logger.info("stepped %d times, env alive", args.steps)
 
             if args.dump_cams is not None:
                 _dump_camera_frames(obs, args.dump_cams)
@@ -85,7 +92,7 @@ def _run(args: argparse.Namespace) -> int:
             env.close()
 
     except Exception:
-        traceback.print_exc()
+        logger.exception("smoke test failed")
         return 1
     finally:
         simulation_app.close()
@@ -112,7 +119,7 @@ def _dump_camera_frames(obs, out_dir: pathlib.Path) -> None:
         frame = tensor[0].cpu().numpy().astype("uint8")
         path = out_dir / f"{name}.png"
         Image.fromarray(frame).save(path)
-        print(f"wrote {path}", flush=True)
+        logger.info("wrote %s", path)
 
 
 def _save_videos(out_path: pathlib.Path, table_frames, wrist_frames, fps: int) -> None:
@@ -121,17 +128,19 @@ def _save_videos(out_path: pathlib.Path, table_frames, wrist_frames, fps: int) -
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     composite = []
-    for t, w in zip(table_frames, wrist_frames):
+    for t, w in zip(table_frames, wrist_frames, strict=False):
         if t is None and w is None:
             continue
         if w is None:
-            composite.append(t); continue
+            composite.append(t)
+            continue
         if t is None:
-            composite.append(w); continue
+            composite.append(w)
+            continue
         composite.append(np.concatenate([t, w], axis=1))
 
     imageio.mimsave(str(out_path), composite, fps=fps)
-    print(f"wrote {out_path} ({len(composite)} frames @ {fps} fps)", flush=True)
+    logger.info("wrote %s (%d frames @ %d fps)", out_path, len(composite), fps)
 
 
 if __name__ == "__main__":

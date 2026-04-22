@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import torch
-
 from isaaclab_mimic.envs.franka_stack_ik_rel_mimic_env import FrankaCubeStackIKRelMimicEnv
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
-
 from isaaclab.assets import RigidObject
 from isaaclab.envs.mdp import (  # noqa: F401  re-exported for env cfg
     image,

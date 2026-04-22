@@ -29,7 +29,7 @@ env/
 .DS_Store
 Thumbs.db
 
-media/
+/media/
 
 # Generated robot assets — only the *.urdf.xacro source is committed.
 # Regenerate via: xacro <name>.urdf.xacro -o <name>.urdf
