@@ -4,8 +4,8 @@ allow-direct-references = true
 [project]
 name = "arm-vla"
 version = "0.1.0"
-description = "OpenVLA fine-tuning pipeline for UR10 pick-and-place tasks in Isaac Lab."
-requires-python = ">=3.10"
+description = "ACT imitation pipeline for Isaac Lab manipulation tasks (UR5 + parallel-jaw gripper, single-task per checkpoint)."
+requires-python = ">=3.12"
 readme = "README.md"
 
 # torch is installed separately from NVIDIA's index; see README for the
@@ -14,38 +14,18 @@ dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
     "h5py>=3.10",
-    "draccus>=0.8",
 ]
 
 [project.optional-dependencies]
+# Training-side deps. Installed into the local training venv.
 ml = [
-    # OpenVLA is pinned to transformers==4.40.1 / timm<1.0. The runtime
-    # patches in eval/rollout.py + eval/zeroshot.py let it work with newer
-    # transformers, but timm must stay <1.0.
-    "transformers>=4.40,<4.58",
-    "accelerate>=1.0",
-    "peft>=0.13",
-    "datasets>=3.0",
-    "bitsandbytes>=0.44 ; platform_machine == 'x86_64'",
-    "tensorflow>=2.15",
-    "tensorflow-datasets>=4.9",
-    "tensorflow-graphics",
-    "dlimp @ git+https://github.com/kvablack/dlimp@main",
-    "wandb>=0.18",
-    "timm>=0.9.10,<1.0",
-    "einops>=0.8",
-    "rich>=13",
-    "openvla @ git+https://github.com/openvla/openvla@main",
+    "torchvision>=0.18",  # ResNet18 backbone for the ACT image encoder
 ]
 
+# Eval-side deps. Installed into Isaac Lab's python.
 sim = [
     "h5py>=3.10",
-    "tensorflow-datasets>=4.9",
-    "transformers>=4.40,<4.58",
-    "peft>=0.13",
-    "accelerate>=1.0",
-    "timm>=0.9.10,<1.0",
-    "pillow>=10",
+    "torchvision>=0.18",
     "imageio[ffmpeg]>=2.34",
 ]
 
@@ -63,7 +43,7 @@ packages = ["src/arm_vla"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

@@ -1,1 +1,1 @@
-"""OpenVLA LoRA fine-tune. Runs in the training venv."""
+"""ACT trainer + policy. Runs in the training venv."""

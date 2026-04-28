@@ -1,12 +1,11 @@
-"""Evaluate a fine-tuned OpenVLA checkpoint via sim rollouts.
+"""Evaluate a trained ACT checkpoint via Isaac Lab sim rollouts.
 
-Loads the base model + LoRA adapters, opens the Isaac Lab task env, runs
-N episodes, and writes a summary plus per-episode mp4 videos into
+Loads the policy + normalization stats, opens the gym env, runs N
+episodes, writes per-episode mp4 + a summary.json into
 ``eval/runs/<timestamp>/``.
 
-    ./scripts/eval.sh --checkpoint checkpoints/openvla-ur5-pickplace-lora/final
+    ./scripts/eval.sh --checkpoint checkpoints/act-ur5-pickplace/final
     ./scripts/eval.sh --checkpoint <ckpt> --task pick_place_ur10
-    ./scripts/eval.sh --checkpoint <ckpt> --task stack
 """
 
 from __future__ import annotations
@@ -32,10 +31,9 @@ class EvalArgs:
     task: str = "pick_place"
     num_episodes: int = 20
     max_steps_per_episode: int = 300
-    instruction: str | None = None
     output_dir: pathlib.Path = pathlib.Path("eval/runs")
-    unnorm_key: str | None = None
     record_video: bool = True
+    action_horizon: int | None = None
 
 
 def _parse_args() -> EvalArgs:
@@ -44,34 +42,38 @@ def _parse_args() -> EvalArgs:
     p.add_argument("--task", choices=list(TASK_REGISTRY), default="pick_place")
     p.add_argument("--num-episodes", type=int, default=20)
     p.add_argument("--max-steps-per-episode", type=int, default=300)
-    p.add_argument("--instruction", type=str, default=None)
     p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("eval/runs"))
-    p.add_argument(
-        "--unnorm-key",
-        type=str,
-        default=None,
-        help="Override the per-task default (which matches the RLDS dataset name)",
-    )
     p.add_argument("--no-video", action="store_true")
-    args = p.parse_args()
-    return EvalArgs(
-        checkpoint=args.checkpoint,
-        task=args.task,
-        num_episodes=args.num_episodes,
-        max_steps_per_episode=args.max_steps_per_episode,
-        instruction=args.instruction,
-        output_dir=args.output_dir,
-        unnorm_key=args.unnorm_key,
-        record_video=not args.no_video,
+    p.add_argument(
+        "--action-horizon",
+        type=int,
+        default=None,
+        help="How many actions of each predicted chunk to execute before re-planning. Default: chunk_size (full open-loop replay).",
     )
+    a = p.parse_args()
+    return EvalArgs(
+        checkpoint=a.checkpoint,
+        task=a.task,
+        num_episodes=a.num_episodes,
+        max_steps_per_episode=a.max_steps_per_episode,
+        output_dir=a.output_dir,
+        record_video=not a.no_video,
+        action_horizon=a.action_horizon,
+    )
+
+
+def _check_success(env) -> bool:
+    try:
+        term = env.unwrapped.cfg.terminations.success
+        return bool(term.func(env.unwrapped, **term.params)[0])
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return False
 
 
 def main() -> int:
     setup_logging()
     args = _parse_args()
     spec = TASK_REGISTRY[args.task]
-    instruction = args.instruction or spec["instruction"]
-    unnorm_key = args.unnorm_key or spec["unnorm_key"]
 
     run_dir = args.output_dir / time.strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -82,39 +84,24 @@ def main() -> int:
         import gymnasium as gym
         import numpy as np
         import torch
-        from peft import PeftModel
-        from PIL import Image
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+
+        from arm_vla.training.act_policy import load_policy
 
         importlib.import_module(spec["module"])  # registers gym id
 
-        # Patch OpenVLA class for transformers 4.57+ compatibility.
-        from transformers.dynamic_module_utils import get_class_from_dynamic_module
-        _vla_cls = get_class_from_dynamic_module(
-            "modeling_prismatic.OpenVLAForActionPrediction", "openvla/openvla-7b"
-        )
-        _vla_cls._supports_sdpa = True
-        _vla_cls._supports_flash_attn_2 = False
-
-        processor = AutoProcessor.from_pretrained(str(args.checkpoint), trust_remote_code=True)
-        base = AutoModelForVision2Seq.from_pretrained(
-            "openvla/openvla-7b",
-            torch_dtype=torch.bfloat16,
-            attn_implementation="sdpa",
-            trust_remote_code=True,
-        ).to("cuda")
-        vla = PeftModel.from_pretrained(base, str(args.checkpoint))
-        vla.eval()
+        policy = load_policy(args.checkpoint, device="cuda")
+        if args.action_horizon is not None:
+            policy.action_horizon = args.action_horizon
+        cam_keys = policy.model.camera_keys
+        logger.info("loaded ACT policy: chunk=%d, action_horizon=%d, cams=%s",
+                    policy.model.cfg.chunk_size, policy.action_horizon, cam_keys)
 
         cfg_mod_path, cfg_cls = spec["cfg_path"].split(":")
         cfg_mod = importlib.import_module(cfg_mod_path)
-        cfg = getattr(cfg_mod, cfg_cls)()
-        cfg.scene.num_envs = 1
-        env = gym.make(spec["gym_id"], cfg=cfg)
+        env_cfg = getattr(cfg_mod, cfg_cls)()
+        env_cfg.scene.num_envs = 1
+        env = gym.make(spec["gym_id"], cfg=env_cfg)
         device = env.unwrapped.device
-
-        prompt = f"In: What action should the robot take to {instruction}?\nOut:"
-        logger.info("task: %s  instruction: %s", args.task, instruction)
 
         successes = 0
         results: list[dict] = []
@@ -122,20 +109,32 @@ def main() -> int:
 
         for ep in range(args.num_episodes):
             obs, _ = env.reset()
+            policy.reset()
             frames: list = []
             success = False
             steps_to_success: int | None = None
 
             for t in range(args.max_steps_per_episode):
+                # Build the policy input from the env observation.
+                cam_imgs: dict[str, torch.Tensor] = {}
+                for k in cam_keys:
+                    arr = obs["policy"][k][0].cpu().numpy().astype("uint8")  # (H, W, 3)
+                    cam_imgs[k] = torch.from_numpy(arr).permute(2, 0, 1).contiguous()
+
+                # Reconstruct the 8-D state from the env: eef_pos(3) + eef_quat(4) + gripper(1).
+                # The Mimic-augmented HDF5 stored these under obs/{eef_pos, eef_quat, gripper_pos};
+                # at runtime they're available the same way via obs["policy"].
+                eef_pos = obs["policy"]["eef_pos"][0].cpu().numpy().astype(np.float32).reshape(-1)
+                eef_quat = obs["policy"]["eef_quat"][0].cpu().numpy().astype(np.float32).reshape(-1)
+                grip = obs["policy"]["gripper_pos"][0].cpu().numpy().astype(np.float32).reshape(-1)[:1]
+                state = torch.from_numpy(np.concatenate([eef_pos, eef_quat, grip], axis=0))
+
+                # Record video as a side-by-side panel (table | wrist) for inspection.
                 table = obs["policy"]["table_cam"][0].cpu().numpy().astype("uint8")
                 wrist = obs["policy"]["wrist_cam"][0].cpu().numpy().astype("uint8")
                 frames.append(np.concatenate([table, wrist], axis=1))
 
-                inputs = processor(prompt, Image.fromarray(table)).to("cuda", dtype=torch.bfloat16)
-                with torch.inference_mode():
-                    action = vla.predict_action(
-                        **inputs, unnorm_key=unnorm_key, do_sample=False
-                    )
+                action = policy.select_action(cam_imgs, state)  # (action_dim,)
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
 
@@ -164,17 +163,16 @@ def main() -> int:
                 save_video(run_dir / f"ep_{ep:03d}.mp4", frames, fps=15)
             episode_frames.append(frames)
 
-        # Write summary + optional combined reel BEFORE env.close() —
-        # Isaac Lab's SurfaceGripper cleanup can SIGABRT on shutdown.
-        rate = successes / args.num_episodes
+        # Write summary + reel BEFORE env.close() — Isaac Lab's
+        # SurfaceGripper cleanup can SIGABRT on shutdown.
+        rate = successes / max(1, args.num_episodes)
         summary = {
             "task": args.task,
-            "instruction": instruction,
-            "unnorm_key": unnorm_key,
             "num_episodes": args.num_episodes,
             "successes": successes,
             "success_rate": rate,
             "checkpoint": str(args.checkpoint),
+            "action_horizon": policy.action_horizon,
             "episodes": results,
         }
         save_summary(run_dir / "summary.json", summary)
@@ -187,20 +185,12 @@ def main() -> int:
                     all_frames.extend([np.zeros_like(ep_frames[0])] * 8)
             save_video(run_dir / "reel.mp4", all_frames, fps=15)
 
-        logger.info(
-            "success rate: %.1f%% (%d/%d)",
-            rate * 100,
-            successes,
-            args.num_episodes,
-        )
+        logger.info("success rate: %.1f%% (%d/%d)", rate * 100, successes, args.num_episodes)
         logger.info("results: %s", run_dir)
 
         try:
             env.close()
         except (RuntimeError, AttributeError, AssertionError):
-            # Isaac Lab SurfaceGripper + PhysX teardown ordering can raise
-            # here; the simulation is already shutting down so it's safe
-            # to swallow. SIGABRT can still happen and is uncatchable.
             logger.warning("env.close() raised during teardown (ignored)", exc_info=True)
 
     except Exception:
@@ -210,14 +200,6 @@ def main() -> int:
         app.close()
 
     return 0
-
-
-def _check_success(env) -> bool:
-    try:
-        term = env.unwrapped.cfg.terminations.success
-        return bool(term.func(env.unwrapped, **term.params)[0])
-    except (AttributeError, KeyError, IndexError, TypeError):
-        return False
 
 
 if __name__ == "__main__":

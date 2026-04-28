@@ -8,11 +8,11 @@ Python environment it needs.
 | `smoke.sh`          | Isaac Lab  | Scene preview for the pick-place env                |
 | `smoke_stack.sh`    | Isaac Lab  | Scene preview for the stack env                     |
 | `teleop.sh`         | Isaac Lab  | Record keyboard demos to HDF5                       |
+| `annotate.sh`       | Isaac Lab  | Annotate raw demos with mimic datagen_info          |
 | `mimic.sh`          | Isaac Lab  | Augment demos via curobo                            |
-| `convert.sh`        | training   | HDF5 → RLDS TFDS                                    |
-| `train.sh`          | training   | OpenVLA LoRA fine-tune                              |
-| `eval.sh`           | Isaac Lab  | Sim rollouts of a fine-tuned checkpoint (mp4 out)   |
-| `zeroshot.sh`       | Isaac Lab  | Pretrained-OpenVLA baseline, no fine-tune (mp4 out) |
+| `oracle.sh`         | Isaac Lab  | Scripted oracle demo collection                     |
+| `train.sh`          | training   | Train ACT on the HDF5 demo file                     |
+| `eval.sh`           | Isaac Lab  | Sim rollouts of a trained checkpoint (mp4 out)      |
 
 Isaac Lab entry: `$ISAACLAB/isaaclab.sh -p` (defaults to `~/IsaacLab`).
-Training venv: `./.venv` (see top-level `README.md`).
+Training venv: see top-level `README.md` (default `/home/ketchup-core/arm-vla-venv`).

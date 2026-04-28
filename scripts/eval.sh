@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Evaluate a fine-tuned OpenVLA checkpoint in the Isaac Lab sim env.
+# Evaluate a trained ACT checkpoint in the Isaac Lab sim env.
 #
 # Flags:
-#   --checkpoint PATH   path to LoRA checkpoint dir (required)
-#   --num-episodes N    default 50
+#   --checkpoint PATH   path to checkpoint dir (e.g. checkpoints/act-ur5-pickplace/final)
+#   --num-episodes N    default 20
 #   --no-video          skip video recording (faster)
+#   --action-horizon N  steps between re-plans (default: chunk_size = full open-loop chunk)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

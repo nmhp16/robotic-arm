@@ -20,7 +20,9 @@ TASK_REGISTRY: dict[str, dict[str, str]] = {
         "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
         "module": "arm_vla.tasks.ur5_pick_place",
         "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
+        # Match the instruction baked into the RLDS training data
+        # (data/rlds/ur5_pick_place/1.0.0 episodes set this string).
+        "instruction": "put the blue cube on the green target",
         "unnorm_key": "ur5_pick_place",
     },
     "pick_place_ur10": {

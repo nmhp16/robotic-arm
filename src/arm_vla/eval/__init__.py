@@ -1,1 +1,1 @@
-"""Sim rollouts of a fine-tuned OpenVLA checkpoint."""
+"""Sim rollouts of a trained ACT checkpoint."""
