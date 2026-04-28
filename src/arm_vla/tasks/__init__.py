@@ -1,17 +1,17 @@
-"""Auto-register gym ids for every task.yaml under ``tasks/``.
+"""Auto-register gym ids for every ``<name>.yaml`` directly under ``tasks/``.
 
-For each ``tasks/<name>/task.yaml`` we build three classes from the spec:
+For each ``tasks/<name>.yaml`` we build three classes from the spec:
 
-* ``<Name>EnvCfg``        — the env_cfg used by gym + rollout
+* ``<Name>EnvCfg``        — env_cfg used by gym + rollout
 * ``<Name>MimicEnvCfg``   — same env wrapped with isaaclab_mimic
 * ``<Name>MimicEnv``      — mimic runtime class
 
-The classes are stashed on this module so ``gym.register`` can resolve
-their ``module:Class`` entry-point strings (``arm_vla.tasks:<ClassName>``).
+Classes are stashed on this module so ``gym.register`` can resolve their
+``module:Class`` entry-point strings (``arm_vla.tasks:<ClassName>``).
 
-To add a new task: drop a ``tasks/<your_task>/task.yaml`` next to
-``pick_place/`` — the next process import re-scans and registers it.
-No Python required for variants of the same archetype.
+To add a new task variant: drop a ``tasks/<your_task>.yaml`` next to
+``pick_place.yaml`` — the next process import re-scans and registers it.
+No Python required for variants of an existing archetype.
 """
 
 from __future__ import annotations
