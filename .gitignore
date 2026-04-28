@@ -33,7 +33,7 @@ Thumbs.db
 
 # Generated robot assets — only the *.urdf.xacro source is committed.
 # Regenerate via: xacro <name>.urdf.xacro -o <name>.urdf
-#                 ./scripts/convert_ur5_2f85.py
+#                 ./scripts/convert_ur5_simple_gripper.py
 /assets/**/*.usd
 /assets/**/*.urdf
 /assets/**/configuration/

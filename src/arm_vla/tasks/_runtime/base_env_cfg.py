@@ -1,8 +1,9 @@
-"""Base env cfg for UR5 pick-and-place.
+"""Generic base configclasses for parametric pick-and-place tasks.
 
-Defines the scene (table, cube, target pad), observation groups, and
-terminations. Robot, actions, events, and cameras are provided by the
-concrete subclass in ``pick_place_ur5_env_cfg.py``.
+Defines the *shape* of the env (scene structure, observation groups,
+action terms, terminations). All task-specific values — object specs,
+camera placements, success thresholds — are filled in by the builder in
+``env_cfg.py`` from the task's task.yaml.
 """
 
 from __future__ import annotations
@@ -12,16 +13,13 @@ from dataclasses import MISSING
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, AssetBaseCfg, RigidObjectCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
-from isaaclab.managers import ActionTermCfg, SceneEntityCfg
+from isaaclab.managers import ActionTermCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
-from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
-from isaaclab.sim.spawners.materials.visual_materials_cfg import PreviewSurfaceCfg
-from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
@@ -30,6 +28,8 @@ from . import mdp
 
 @configclass
 class PickPlaceSceneCfg(InteractiveSceneCfg):
+    """Scene with a robot, ee_frame, table, light — plus pickable + target spawned by the builder."""
+
     robot: ArticulationCfg = MISSING
     ee_frame: FrameTransformerCfg = MISSING
 
@@ -50,7 +50,8 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    cube: RigidObjectCfg = MISSING
+    # Filled in by the builder from `objects:` in task.yaml.
+    pickable: RigidObjectCfg = MISSING
     target: RigidObjectCfg = MISSING
 
 
@@ -62,15 +63,19 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
+    """Default observation groups. The builder also adds task-specific
+    image obs (table_cam / wrist_cam) onto the policy group."""
+
     @configclass
     class PolicyCfg(ObsGroup):
         actions = ObsTerm(func=mdp.last_action)
         joint_pos = ObsTerm(func=mdp.joint_pos_rel)
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        # The builder fills in `params` so these point at the right scene entities.
         object = ObsTerm(func=mdp.object_obs)
-        cube_pos = ObsTerm(func=mdp.cube_position)
-        cube_quat = ObsTerm(func=mdp.cube_orientation)
-        target_pos = ObsTerm(func=mdp.target_position)
+        cube_pos = ObsTerm(func=mdp.object_position)
+        cube_quat = ObsTerm(func=mdp.object_orientation)
+        target_pos = ObsTerm(func=mdp.object_position)
         eef_pos = ObsTerm(func=mdp.ee_frame_pos)
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)
         gripper_pos = ObsTerm(func=mdp.gripper_pos)
@@ -87,20 +92,9 @@ class ObservationsCfg:
 
     @configclass
     class SubtaskCfg(ObsGroup):
-        grasp = ObsTerm(
-            func=mdp.object_grasped,
-            params={
-                "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-                "object_cfg": SceneEntityCfg("cube"),
-            },
-        )
-        place = ObsTerm(
-            func=mdp.cube_on_target,
-            params={
-                "cube_cfg": SceneEntityCfg("cube"),
-                "target_cfg": SceneEntityCfg("target"),
-            },
-        )
+        # Builder fills `params` to point at the right object names + thresholds.
+        grasp = ObsTerm(func=mdp.object_grasped)
+        place = ObsTerm(func=mdp.object_on_target)
 
         def __post_init__(self):
             self.enable_corruption = False
@@ -113,22 +107,20 @@ class ObservationsCfg:
 
 @configclass
 class TerminationsCfg:
+    """Default terminations: timeout + object-dropped + success.
+    Builder fills in `success` params so the function points at the right
+    pickable/target with the right thresholds."""
+
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    cube_dropping = DoneTerm(
-        func=mdp.root_height_below_minimum,
-        params={"minimum_height": -0.05, "asset_cfg": SceneEntityCfg("cube")},
-    )
-    success = DoneTerm(
-        func=mdp.cube_on_target,
-        params={
-            "cube_cfg": SceneEntityCfg("cube"),
-            "target_cfg": SceneEntityCfg("target"),
-        },
-    )
+    pickable_dropping = DoneTerm(func=mdp.root_height_below_minimum)
+    success = DoneTerm(func=mdp.object_on_target)
 
 
 @configclass
-class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
+class PickPlaceEnvCfgBase(ManagerBasedRLEnvCfg):
+    """Shape-only env cfg. The builder in env_cfg.py subclasses this and
+    fills in task-specific values via __post_init__."""
+
     scene: PickPlaceSceneCfg = PickPlaceSceneCfg(num_envs=1, env_spacing=2.5, replicate_physics=False)
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()
@@ -144,49 +136,3 @@ class PickPlaceEnvCfg(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.dt = 0.01  # 100 Hz
         self.sim.render_interval = 5
-
-        cube_props = RigidBodyPropertiesCfg(
-            solver_position_iteration_count=16,
-            solver_velocity_iteration_count=1,
-            max_angular_velocity=1000.0,
-            max_linear_velocity=1000.0,
-            max_depenetration_velocity=5.0,
-            disable_gravity=False,
-        )
-
-        # Procedurally spawned cube (not the nucleus blue_block.usd) so we
-        # can apply a high-friction physics material. Nucleus USD shipped
-        # cubes don't expose material config through UsdFileCfg. PhysX
-        # default μ ≈ 0.5 isn't enough for the 2F-85 asymmetric closure; at
-        # μ ≈ 2.0 a one-sided grip still holds during lift.
-        cube_material = sim_utils.RigidBodyMaterialCfg(
-            static_friction=2.0,
-            dynamic_friction=1.8,
-            restitution=0.0,
-        )
-
-        self.scene.cube = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/PickCube",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.45, 0.0, 0.0403], rot=[1, 0, 0, 0]),
-            spawn=CuboidCfg(
-                size=(0.04, 0.04, 0.04),
-                rigid_props=cube_props,
-                collision_props=CollisionPropertiesCfg(collision_enabled=True),
-                physics_material=cube_material,
-                visual_material=PreviewSurfaceCfg(diffuse_color=(0.1, 0.3, 0.9), roughness=0.5),
-                mass_props=sim_utils.MassPropertiesCfg(mass=0.05),
-            ),
-        )
-
-        self.scene.target = RigidObjectCfg(
-            prim_path="{ENV_REGEX_NS}/TargetPad",
-            init_state=RigidObjectCfg.InitialStateCfg(pos=[0.55, 0.1, 0.0050], rot=[1, 0, 0, 0]),
-            spawn=UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/Blocks/green_block.usd",
-                scale=(2.0, 2.0, 0.2),
-                rigid_props=RigidBodyPropertiesCfg(
-                    kinematic_enabled=True,
-                    disable_gravity=True,
-                ),
-            ),
-        )

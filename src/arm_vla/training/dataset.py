@@ -1,7 +1,8 @@
 """HDF5-backed PyTorch dataset for action-chunking imitation learning.
 
-Reads ``data/augmented/demos.hdf5`` (output of teleop + Mimic augmentation)
-directly. No RLDS / TFDS step. Each ``__getitem__`` returns one window:
+Reads the Mimic-augmented HDF5 (``data/augmented/demos.hdf5`` by default)
+directly — no intermediate format conversion. Each ``__getitem__`` returns
+one window:
 
     images:      dict[str, Tensor(3, H, W) uint8]   one per camera
     state:       Tensor(state_dim,) float32         eef_pos(3) + eef_quat(4) + gripper(1)

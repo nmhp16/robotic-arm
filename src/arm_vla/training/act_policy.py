@@ -39,7 +39,7 @@ _IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
 
 @dataclass
 class ACTConfig:
-    """All policy hyperparameters. Mirrors a section of config.yaml."""
+    """All policy hyperparameters. Mirrors the `policy:` section of defaults.yaml."""
 
     camera_keys: tuple[str, ...] = ("table_cam", "wrist_cam")
     state_dim: int = 8

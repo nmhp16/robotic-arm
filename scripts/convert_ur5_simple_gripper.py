@@ -1,8 +1,8 @@
 """Convert assets/ur5_simple_gripper/ur5_simple_gripper.urdf to USD.
 
-Simpler than the 2F-85 variant — just two prismatic fingers, no mimic
-joints, no 4-bar linkage — so ``convert_mimic_joints_to_normal_joints``
-is irrelevant here. All joints are already independent.
+Two independent prismatic fingers — no mimic joints, no 4-bar linkage —
+so ``convert_mimic_joints_to_normal_joints`` is irrelevant. All joints
+are directly commandable.
 
 Run with:
     ~/IsaacLab/isaaclab.sh -p scripts/convert_ur5_simple_gripper.py

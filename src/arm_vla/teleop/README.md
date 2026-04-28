@@ -1,8 +1,9 @@
 # Teleop
 
 `scripts/teleop.sh` wraps Isaac Lab's `scripts/tools/record_demos.py` with
-task-specific defaults. Output is HDF5 in the format consumed by
-`isaaclab_mimic` and by `arm_vla.data.rlds_convert`.
+task-specific defaults. Output is HDF5 in the format consumed directly by
+`isaaclab_mimic` (augmentation) and by `arm_vla.training.dataset.HDF5DemoDataset`
+(ACT training).
 
 ## HDF5 schema
 

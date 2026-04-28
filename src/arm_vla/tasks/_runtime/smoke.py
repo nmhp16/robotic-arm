@@ -1,8 +1,9 @@
-"""Sanity check for the UR5 + 2F-85 pick-and-place env.
+"""Generic scene preview / sanity check for any registered task.
 
-    ~/IsaacLab/isaaclab.sh -p -m arm_vla.tasks.ur5_pick_place.smoke
+Invoked via ``./scripts/smoke.sh --task <name>``. The cli wrapper passes
+the loaded spec into ``main(spec)``.
 
-Flags:
+Flags (forwarded after --task):
     --visible         open the Isaac Sim GUI instead of running headless
     --random          drive the arm with small random Delta-pose actions so
                       motion is visible (otherwise arm stays at home)
@@ -35,7 +36,7 @@ def _parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _run(args: argparse.Namespace) -> int:
+def _run(args: argparse.Namespace, spec: dict) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -45,17 +46,18 @@ def _run(args: argparse.Namespace) -> int:
     simulation_app = app.app
 
     try:
-        import gymnasium as gym  # noqa: F401
+        import gymnasium as gym
         import numpy as np
         import torch
 
-        import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
-        from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
+        import arm_vla.tasks  # noqa: F401  triggers task auto-registration
 
-        cfg = UR5PickPlaceEnvCfg()
-        cfg.scene.num_envs = 1
+        gym_id = spec["task"]["gym_id"]
+        env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
+        env_cfg = _instantiate_env_cfg(env_cfg_spec)
+        env_cfg.scene.num_envs = 1
 
-        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg)
+        env = gym.make(gym_id, cfg=env_cfg)
         try:
             obs, _ = env.reset()
             logger.info("observation shapes:")
@@ -172,5 +174,18 @@ def _save_videos(out_path: pathlib.Path, table_frames, wrist_frames, fps: int) -
         logger.info("wrote %s", path)
 
 
+def _instantiate_env_cfg(env_cfg_spec: str):
+    import importlib
+
+    mod_name, cls_name = env_cfg_spec.split(":")
+    mod = importlib.import_module(mod_name)
+    return getattr(mod, cls_name)()
+
+
+def main(spec: dict) -> int:
+    return _run(_parse_args(), spec)
+
+
 if __name__ == "__main__":
-    sys.exit(_run(_parse_args()))
+    from arm_vla.config import DEFAULT_TASK, load
+    sys.exit(main(load(DEFAULT_TASK)))

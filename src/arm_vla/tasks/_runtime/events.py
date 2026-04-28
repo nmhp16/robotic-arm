@@ -1,9 +1,9 @@
-"""Reset events scoped to UR5 + 2F-85.
+"""Reset events scoped to UR5 + parallel-jaw.
 
 `isaaclab_tasks.manager_based.manipulation.stack.mdp.franka_stack_events`'s
 randomizer hard-codes "skip last 2 joints" to leave the Panda's two finger
-joints alone. UR5 + 2F-85 has six gripper joints, so we filter by name
-instead of by index.
+joints alone. We filter by joint-name prefix instead so the same event
+works regardless of how many gripper joints the URDF declares.
 """
 
 from __future__ import annotations

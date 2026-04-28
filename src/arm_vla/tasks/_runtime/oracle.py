@@ -1,22 +1,17 @@
-"""Scripted oracle demo collection for UR5 + 2F-85 pick-and-place.
+"""Generic scripted oracle for parametric pick-and-place tasks.
 
-Replaces keyboard teleop with a deterministic state machine that reads
-ground-truth cube/target positions from the env and drives the arm through
-fixed waypoints. Writes the same HDF5 format as Isaac Lab's
-``record_demos.py`` (via ``ActionStateRecorderManagerCfg``), so everything
-downstream (mimic augmentation, RLDS convert, OpenVLA fine-tune) consumes
-the output identically.
+Reads its waypoint geometry + state-machine timing from the task spec
+(``oracle:`` section in task.yaml). Exposes ``main(spec, cli_args)``;
+the cli wrapper passes the loaded spec.
 
 State machine per episode:
-  HOVER    → TCP at cube.xy, cube.z + HOVER_HEIGHT, gripper open
-  DESCEND  → TCP at cube.xy, cube.z + GRASP_Z_OFFSET
+  HOVER    → TCP at pickable.xy, pickable.z + hover_height, gripper open
+  DESCEND  → TCP at pickable.xy, pickable.z + grasp_z_offset
   GRASP    → hold N steps with gripper=close
-  LIFT     → TCP at cube.xy, LIFT_HEIGHT
-  MOVE     → TCP at target.xy, LIFT_HEIGHT
-  PLACE    → TCP at target.xy, target.z + PLACE_Z_OFFSET
-  RELEASE  → gripper=open, hold until success termination
-
-    ./scripts/oracle.sh --num-demos 15
+  LIFT     → TCP at pickable.xy, lift_height
+  MOVE     → TCP at target.xy, lift_height
+  PLACE    → TCP at target.xy, target.z + place_z_offset
+  RELEASE  → gripper=open, hold until env's success termination fires
 """
 
 from __future__ import annotations
@@ -26,39 +21,13 @@ import logging
 import os
 import pathlib
 import sys
+from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from isaaclab.app import AppLauncher
 
 logger = logging.getLogger(__name__)
-
-
-# Waypoint geometry (meters). Blue block is 4 cm cube with centroid ~2 cm
-# above the table. TCP is between fingertips — targeting cube centroid
-# puts the fingers straddling top-to-bottom.
-HOVER_HEIGHT: float = 0.15       # m above cube centroid before descent
-GRASP_Z_OFFSET: float = 0.0      # m relative to cube centroid
-LIFT_HEIGHT: float = 0.25        # m above table during transport
-PLACE_Z_OFFSET: float = 0.035    # m above target pad centroid at release
-
-# Per-step clamp matches the IK-rel action scale. Oracle advances at max
-# speed; Mimic augmentation preserves timing.
-MAX_DXY: float = 0.05
-MAX_DZ: float = 0.05
-
-# Default tolerances (loose); DESCEND/PLACE override with tight z.
-XY_REACH_TOL: float = 0.020      # m — "waypoint reached" in xy
-Z_REACH_TOL: float = 0.015       # m — default z tolerance
-Z_REACH_TOL_TIGHT: float = 0.008 # m — used for DESCEND and PLACE so the
-                                  # arm doesn't leave the gripper hovering
-                                  # above its target
-GRASP_HOLD_STEPS: int = 15       # gripper=close + motion pause
-RELEASE_HOLD_STEPS: int = 5      # gripper=open, then wait for env success
-
-# Safety caps.
-MAX_STEPS_PER_EPISODE: int = 400
-NUM_SUCCESS_STEPS: int = 10       # env's cube_on_target must hold this many
-MAX_EPISODE_ATTEMPTS_PER_DEMO: int = 5  # cap retries when grasps miss
 
 
 class Phase(Enum):
@@ -71,26 +40,63 @@ class Phase(Enum):
     RELEASE = 7
 
 
-def _parse_args() -> argparse.Namespace:
+@dataclass(frozen=True)
+class _OracleParams:
+    hover_height: float
+    grasp_z_offset: float
+    lift_height: float
+    place_z_offset: float
+    max_dxy: float
+    max_dz: float
+    xy_reach_tol: float
+    z_reach_tol: float
+    z_reach_tol_tight: float
+    grasp_hold_steps: int
+    release_hold_steps: int
+    max_steps_per_episode: int
+    max_attempts_per_demo: int
+
+    @classmethod
+    def from_spec(cls, spec: dict[str, Any]) -> _OracleParams:
+        o = spec["oracle"]
+        return cls(
+            hover_height=float(o["hover_height"]),
+            grasp_z_offset=float(o["grasp_z_offset"]),
+            lift_height=float(o["lift_height"]),
+            place_z_offset=float(o["place_z_offset"]),
+            max_dxy=float(o["max_dxy"]),
+            max_dz=float(o["max_dz"]),
+            xy_reach_tol=float(o["xy_reach_tol"]),
+            z_reach_tol=float(o["z_reach_tol"]),
+            z_reach_tol_tight=float(o["z_reach_tol_tight"]),
+            grasp_hold_steps=int(o["grasp_hold_steps"]),
+            release_hold_steps=int(o["release_hold_steps"]),
+            max_steps_per_episode=int(o["max_steps_per_episode"]),
+            max_attempts_per_demo=int(o["max_episode_attempts_per_demo"]),
+        )
+
+
+def _parse_args(default_dataset: str, default_max_steps: int) -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--num-demos", type=int, default=15)
-    p.add_argument(
-        "--dataset-file",
-        type=pathlib.Path,
-        default=pathlib.Path("data/raw/demos.hdf5"),
-    )
-    p.add_argument("--max-steps", type=int, default=MAX_STEPS_PER_EPISODE)
+    p.add_argument("--dataset-file", type=pathlib.Path, default=pathlib.Path(default_dataset))
+    p.add_argument("--max-steps", type=int, default=default_max_steps)
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
 
 
-def main() -> int:
+def main(spec: dict[str, Any]) -> int:
+    """Entry point invoked by ``arm_vla.cli.oracle``."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    args = _parse_args()
+    params = _OracleParams.from_spec(spec)
+    args = _parse_args(
+        default_dataset=spec["data"]["raw_path"],
+        default_max_steps=params.max_steps_per_episode,
+    )
 
     app = AppLauncher(headless=True, enable_cameras=True).app
 
@@ -100,89 +106,78 @@ def main() -> int:
         from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
         from isaaclab.managers.recorder_manager import DatasetExportMode
 
-        import arm_vla.tasks.ur5_pick_place  # noqa: F401  registers gym id
-        from arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg import UR5PickPlaceEnvCfg
+        import arm_vla.tasks  # noqa: F401  triggers task auto-registration
+
+        gym_id = spec["task"]["gym_id"]
+        env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
+        env_cfg = _instantiate_env_cfg(env_cfg_spec)
+        env_cfg.scene.num_envs = 1
+        # Run until the env's own success termination fires, not the time cap.
+        env_cfg.terminations.time_out = None
+        env_cfg.observations.policy.concatenate_terms = False
 
         output_dir = str(args.dataset_file.parent.resolve())
-        output_file_name = args.dataset_file.stem
         os.makedirs(output_dir, exist_ok=True)
+        env_cfg.recorders = ActionStateRecorderManagerCfg()
+        env_cfg.recorders.dataset_export_dir_path = output_dir
+        env_cfg.recorders.dataset_filename = args.dataset_file.stem
+        env_cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
 
-        cfg = UR5PickPlaceEnvCfg()
-        cfg.scene.num_envs = 1
-        # Run until the env's own success termination fires, not the time cap.
-        cfg.terminations.time_out = None
-        cfg.observations.policy.concatenate_terms = False
-        cfg.recorders = ActionStateRecorderManagerCfg()
-        cfg.recorders.dataset_export_dir_path = output_dir
-        cfg.recorders.dataset_filename = output_file_name
-        cfg.recorders.dataset_export_mode = DatasetExportMode.EXPORT_SUCCEEDED_ONLY
-
-        env = gym.make("Isaac-PickPlace-UR5-IK-Rel-v0", cfg=cfg).unwrapped
+        env = gym.make(gym_id, cfg=env_cfg).unwrapped
         device = env.device
 
         exported = 0
         episode_idx = 0
+        max_attempts = args.num_demos * params.max_attempts_per_demo
 
-        max_attempts = args.num_demos * MAX_EPISODE_ATTEMPTS_PER_DEMO
         while exported < args.num_demos and episode_idx < max_attempts:
             episode_idx += 1
             obs, _ = env.reset()
 
-            cube_pos = obs["policy"]["cube_pos"][0].cpu().numpy()
-            target_pos = obs["policy"]["target_pos"][0].cpu().numpy()
-            waypoints = _plan(cube_pos, target_pos)
-
             phase = Phase.HOVER
             hold_counter = 0
             succeeded = False
-
             prev_phase = None
-            lift_xy_ref = None      # TCP xy frozen at LIFT entry
-            grasp_cube_pos = None   # cube pose frozen at GRASP entry, so
-                                    # asymmetric finger closure can't pull
-                                    # the waypoint around mid-grasp
+            lift_xy_ref = None         # TCP xy frozen at LIFT entry
+            grasp_pickable_pos = None  # pickable pose frozen at GRASP entry
+
             for step in range(args.max_steps):
                 tcp = obs["policy"]["eef_pos"][0].cpu().numpy()
-                cube_now = obs["policy"]["cube_pos"][0].cpu().numpy()
+                pickable_now = obs["policy"]["cube_pos"][0].cpu().numpy()
                 target_now = obs["policy"]["target_pos"][0].cpu().numpy()
                 gripper_rad = float(obs["policy"]["gripper_pos"][0, 0].cpu())
 
-                if phase is Phase.GRASP and grasp_cube_pos is None:
-                    grasp_cube_pos = cube_now.copy()
+                if phase is Phase.GRASP and grasp_pickable_pos is None:
+                    grasp_pickable_pos = pickable_now.copy()
                 if phase is Phase.LIFT and lift_xy_ref is None:
                     lift_xy_ref = tcp[:2].copy()
 
-                # Pre-GRASP phases track the live cube so small nudges
-                # during descent don't strand the approach. Once we hit
-                # GRASP, freeze the cube reference and let the jaws close
-                # on whatever's actually there.
-                cube_for_plan = grasp_cube_pos if grasp_cube_pos is not None else cube_now
-                waypoints = _plan_dynamic(
-                    cube_for_plan, target_now, tcp, lift_xy_ref, phase
-                )
+                # Pre-GRASP: track the live pickable so descent corrects for nudges.
+                # Post-GRASP: freeze xy so reading the pickable's pose (which now
+                # rides the arm) doesn't form a feedback loop dragging it out of the jaws.
+                pickable_for_plan = grasp_pickable_pos if grasp_pickable_pos is not None else pickable_now
+                waypoints = _plan(pickable_for_plan, target_now, lift_xy_ref, params)
 
                 wp_pos, gripper_open = waypoints[phase]
-                reached = _reached(tcp, wp_pos, phase)
-                action = _compute_action(tcp, wp_pos, gripper_open)
+                reached = _reached(tcp, wp_pos, phase, params)
+                action = _compute_action(tcp, wp_pos, gripper_open, params)
 
                 if phase is not prev_phase or step % 5 == 0:
                     logger.info(
                         "  ep%2d t%3d %-7s tcp=[%+.3f,%+.3f,%+.3f] "
-                        "cube=[%+.3f,%+.3f,%+.3f] act_grip=%+.1f obs_grip=%.2f reached=%s",
+                        "obj=[%+.3f,%+.3f,%+.3f] act_grip=%+.1f obs_grip=%.2f reached=%s",
                         episode_idx, step, phase.name,
                         tcp[0], tcp[1], tcp[2],
-                        cube_now[0], cube_now[1], cube_now[2],
+                        pickable_now[0], pickable_now[1], pickable_now[2],
                         action[6], gripper_rad, reached,
                     )
                 prev_phase = phase
 
                 if phase in (Phase.GRASP, Phase.RELEASE):
                     hold_counter += 1
-                    if phase is Phase.GRASP and hold_counter >= GRASP_HOLD_STEPS:
+                    if phase is Phase.GRASP and hold_counter >= params.grasp_hold_steps:
                         phase = Phase.LIFT
                         hold_counter = 0
-                    # For RELEASE we keep sending gripper=open until the env
-                    # success termination fires below.
                 elif reached:
                     phase = _next_phase(phase)
                     hold_counter = 0
@@ -190,11 +185,6 @@ def main() -> int:
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
 
-                # The env's `success` termination fires on a single step of
-                # `cube_on_target` with gripper open. That's the completion
-                # signal we want — no need to wait for NUM_SUCCESS_STEPS of
-                # accumulated success. When it fires, export the episode
-                # before the env auto-resets.
                 tm = env.termination_manager
                 if bool(tm.get_term("success")[0]):
                     env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
@@ -207,10 +197,7 @@ def main() -> int:
                     break
 
                 if bool(terminated[0]) or bool(truncated[0]):
-                    flags = {
-                        name: bool(tm.get_term(name)[0])
-                        for name in tm.active_terms
-                    }
+                    flags = {name: bool(tm.get_term(name)[0]) for name in tm.active_terms}
                     logger.info(
                         "  ep%2d ENDED at t=%d phase=%s flags=%s",
                         episode_idx, step, phase.name, flags,
@@ -238,39 +225,24 @@ def main() -> int:
     return 0
 
 
-def _plan(cube_pos, target_pos) -> dict:
-    """Initial waypoint table computed at reset. Superseded each step by
-    ``_plan_dynamic``; kept for the first iteration before the state machine
-    has run."""
+def _instantiate_env_cfg(env_cfg_spec: str):
+    import importlib
+
+    mod_name, cls_name = env_cfg_spec.split(":")
+    mod = importlib.import_module(mod_name)
+    return getattr(mod, cls_name)()
+
+
+def _plan(pickable_pos, target_pos, lift_xy_ref, p: _OracleParams) -> dict:
+    lift_xy = lift_xy_ref if lift_xy_ref is not None else pickable_pos[:2]
     return {
-        Phase.HOVER:   (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + HOVER_HEIGHT), True),
-        Phase.DESCEND: (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + GRASP_Z_OFFSET), True),
-        Phase.GRASP:   (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + GRASP_Z_OFFSET), False),
-        Phase.LIFT:    (_xyz(cube_pos[0],   cube_pos[1],   LIFT_HEIGHT),                   False),
-        Phase.MOVE:    (_xyz(target_pos[0], target_pos[1], LIFT_HEIGHT),                   False),
-        Phase.PLACE:   (_xyz(target_pos[0], target_pos[1], target_pos[2] + PLACE_Z_OFFSET), False),
-        Phase.RELEASE: (_xyz(target_pos[0], target_pos[1], target_pos[2] + PLACE_Z_OFFSET), True),
-    }
-
-
-def _plan_dynamic(cube_pos, target_pos, tcp, lift_xy_ref, phase: Phase) -> dict:
-    """Per-step waypoint table with lateral-drift prevention.
-
-    Pre-grasp phases track the live cube so the approach corrects for any
-    small cube nudges from the descent. Post-grasp phases freeze xy to
-    either the TCP-at-LIFT-entry (LIFT) or the target pose (MOVE/PLACE/
-    RELEASE) — the cube rides the arm, so re-reading cube_pos here creates
-    a feedback loop that drags it out of the jaws."""
-    # Fallback to current TCP xy if LIFT reference hasn't been captured yet.
-    lift_xy = lift_xy_ref if lift_xy_ref is not None else tcp[:2]
-    return {
-        Phase.HOVER:   (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + HOVER_HEIGHT), True),
-        Phase.DESCEND: (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + GRASP_Z_OFFSET), True),
-        Phase.GRASP:   (_xyz(cube_pos[0],   cube_pos[1],   cube_pos[2] + GRASP_Z_OFFSET), False),
-        Phase.LIFT:    (_xyz(float(lift_xy[0]), float(lift_xy[1]), LIFT_HEIGHT),          False),
-        Phase.MOVE:    (_xyz(target_pos[0], target_pos[1], LIFT_HEIGHT),                   False),
-        Phase.PLACE:   (_xyz(target_pos[0], target_pos[1], target_pos[2] + PLACE_Z_OFFSET), False),
-        Phase.RELEASE: (_xyz(target_pos[0], target_pos[1], target_pos[2] + PLACE_Z_OFFSET), True),
+        Phase.HOVER:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.hover_height), True),
+        Phase.DESCEND: (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.grasp_z_offset), True),
+        Phase.GRASP:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.grasp_z_offset), False),
+        Phase.LIFT:    (_xyz(float(lift_xy[0]), float(lift_xy[1]), p.lift_height), False),
+        Phase.MOVE:    (_xyz(target_pos[0], target_pos[1], p.lift_height), False),
+        Phase.PLACE:   (_xyz(target_pos[0], target_pos[1], target_pos[2] + p.place_z_offset), False),
+        Phase.RELEASE: (_xyz(target_pos[0], target_pos[1], target_pos[2] + p.place_z_offset), True),
     }
 
 
@@ -280,40 +252,31 @@ def _xyz(x: float, y: float, z: float):
 
 
 def _next_phase(phase: Phase) -> Phase:
-    order = [
-        Phase.HOVER, Phase.DESCEND, Phase.GRASP,
-        Phase.LIFT, Phase.MOVE, Phase.PLACE, Phase.RELEASE,
-    ]
+    order = [Phase.HOVER, Phase.DESCEND, Phase.GRASP, Phase.LIFT, Phase.MOVE, Phase.PLACE, Phase.RELEASE]
     i = order.index(phase)
     return order[min(i + 1, len(order) - 1)]
 
 
-def _reached(tcp, wp_pos, phase: Phase) -> bool:
+def _reached(tcp, wp_pos, phase: Phase, p: _OracleParams) -> bool:
     import numpy as np
     dxy = float(np.linalg.norm(tcp[:2] - wp_pos[:2]))
     dz = abs(float(tcp[2] - wp_pos[2]))
-    # Tighten z at descent-to-contact phases so the gripper doesn't close
-    # on empty air 1 cm above the cube.
-    z_tol = Z_REACH_TOL_TIGHT if phase in (Phase.DESCEND, Phase.PLACE) else Z_REACH_TOL
-    return dxy < XY_REACH_TOL and dz < z_tol
+    z_tol = p.z_reach_tol_tight if phase in (Phase.DESCEND, Phase.PLACE) else p.z_reach_tol
+    return dxy < p.xy_reach_tol and dz < z_tol
 
 
-def _compute_action(tcp, wp_pos, gripper_open: bool):
+def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams):
     import numpy as np
 
-    dx = float(np.clip(wp_pos[0] - tcp[0], -MAX_DXY, MAX_DXY))
-    dy = float(np.clip(wp_pos[1] - tcp[1], -MAX_DXY, MAX_DXY))
-    dz = float(np.clip(wp_pos[2] - tcp[2], -MAX_DZ, MAX_DZ))
-    # Isaac Lab's BinaryJointAction convention (see binary_joint_actions.py):
-    # positive action = OPEN command, negative = CLOSE. The inverted
-    # convention from the earlier opus_agent.py / rollout.py was a bug.
+    dx = float(np.clip(wp_pos[0] - tcp[0], -p.max_dxy, p.max_dxy))
+    dy = float(np.clip(wp_pos[1] - tcp[1], -p.max_dxy, p.max_dxy))
+    dz = float(np.clip(wp_pos[2] - tcp[2], -p.max_dz, p.max_dz))
+    # Isaac Lab BinaryJointAction: positive = OPEN, negative = CLOSE.
     gripper_cmd = 1.0 if gripper_open else -1.0
-
-    return np.array(
-        [dx, dy, dz, 0.0, 0.0, 0.0, gripper_cmd],
-        dtype=np.float32,
-    )
+    return np.array([dx, dy, dz, 0.0, 0.0, 0.0, gripper_cmd], dtype=np.float32)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Standalone: load default task config, then run.
+    from arm_vla.config import DEFAULT_TASK, load
+    sys.exit(main(load(DEFAULT_TASK)))

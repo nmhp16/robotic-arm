@@ -1,12 +1,13 @@
-"""Train ACT on UR5 pick-and-place demos.
+"""Train ACT on the HDF5 demo file for a given task.
 
-Single-config trainer — replaces the OpenVLA LoRA pipeline. Reads
-``data/augmented/demos.hdf5`` directly (no RLDS step), constructs an
-action-chunked dataloader, trains an ACT model with L1 loss, and saves
-the policy + normalization stats every ``save_every`` steps.
+Reads ``src/arm_vla/training/defaults.yaml`` and overlays
+``src/arm_vla/tasks/<task>/task.yaml`` (deep-merge). Trains the ACT model
+defined in ``act_policy.py`` with L1 loss; saves the policy + norm stats
+to ``training.output_dir`` every ``training.save_every`` steps.
 
-    ./scripts/train.sh                       # uses src/arm_vla/training/config.yaml
-    ./scripts/train.sh --max-steps 1000      # ad-hoc override
+    ./scripts/train.sh                          # uses --task pick_place by default
+    ./scripts/train.sh --task pick_place        # explicit task
+    ./scripts/train.sh --max-steps 1000         # ad-hoc CLI override
 """
 
 from __future__ import annotations
@@ -19,9 +20,9 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
-import yaml
 from torch.utils.data import DataLoader
 
+from arm_vla.config import DEFAULT_TASK, load as load_config
 from arm_vla.training.act_policy import (
     ACTConfig,
     ACTModel,
@@ -36,11 +37,12 @@ logger = logging.getLogger(__name__)
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=pathlib.Path, default=pathlib.Path("src/arm_vla/training/config.yaml"))
-    p.add_argument("--output-dir", type=pathlib.Path, default=pathlib.Path("checkpoints/act-ur5-pickplace"))
-    # Optional ad-hoc overrides (don't have to edit the YAML for a quick test).
+    p.add_argument("--task", default=DEFAULT_TASK, help="task name under src/arm_vla/tasks/")
+    # Optional ad-hoc overrides — handy for quick tests without editing the YAML.
+    p.add_argument("--output-dir", type=pathlib.Path, default=None)
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--hdf5-path", type=pathlib.Path, default=None)
     return p.parse_args()
 
 
@@ -59,16 +61,19 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
     args = _parse_args()
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.task)
 
     if args.max_steps is not None:
         cfg["training"]["max_steps"] = args.max_steps
     if args.batch_size is not None:
         cfg["training"]["batch_size"] = args.batch_size
+    if args.hdf5_path is not None:
+        cfg["data"]["hdf5_path"] = str(args.hdf5_path)
+
+    out_dir = pathlib.Path(args.output_dir or cfg["training"]["output_dir"])
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info("device: %s", device)
+    logger.info("task: %s | device: %s | output_dir: %s", cfg["task"]["name"], device, out_dir)
 
     # --- Data ----------------------------------------------------------------
     data_cfg = cfg["data"]
@@ -118,7 +123,6 @@ def main() -> int:
     )
 
     # --- Train loop ----------------------------------------------------------
-    out_dir = args.output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     max_steps = cfg["training"]["max_steps"]
     log_every = cfg["training"].get("log_every", 50)

@@ -70,30 +70,29 @@ if [[ -z "${SKIP_USD:-}" ]]; then
     if [[ ! -x "$ISAACLAB/isaaclab.sh" ]]; then
         warn "skipping USD conversion (Isaac Lab not found)"
     else
-        # Run conversions only when the USD looks like a placeholder (<10 KB)
+        # Run conversion only when the USD looks like a placeholder (<10 KB)
         # or is missing. The URDF importer is heavy and we want this script
         # to be idempotent.
-        for variant in ur5_simple_gripper ur5_2f85; do
-            usd="$REPO_ROOT/assets/$variant/$variant.usd"
-            script="$REPO_ROOT/scripts/convert_$variant.py"
-            if [[ -f "$usd" ]] && [[ "$(stat -c %s "$usd" 2>/dev/null || echo 0)" -gt 10240 ]]; then
-                log "USD ok: $usd"
-                continue
-            fi
-            if [[ ! -f "$script" ]]; then
-                warn "no converter script for $variant"
-                continue
-            fi
+        variant=ur5_simple_gripper
+        usd="$REPO_ROOT/assets/$variant/$variant.usd"
+        script="$REPO_ROOT/scripts/convert_$variant.py"
+        if [[ -f "$usd" ]] && [[ "$(stat -c %s "$usd" 2>/dev/null || echo 0)" -gt 10240 ]]; then
+            log "USD ok: $usd"
+        else
             log "converting $variant URDF -> USD"
             env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p "$script"
-        done
+        fi
     fi
 fi
 
 log "done."
 log ""
-log "next steps:"
-log "  ./scripts/teleop.sh --task tasks/pick_blue_on_green.yaml --num-demos 15"
-log "  ./scripts/mimic.sh  --task tasks/pick_blue_on_green.yaml --num-demos 500"
-log "  ./scripts/train.sh  --task tasks/pick_blue_on_green.yaml"
-log "  ./scripts/eval.sh   --task tasks/pick_blue_on_green.yaml --checkpoint <ckpt>"
+log "task config lives at:    src/arm_vla/tasks/<task>/task.yaml"
+log "shared hyperparams at:   src/arm_vla/training/defaults.yaml"
+log ""
+log "next steps (default --task pick_place):"
+log "  ./scripts/teleop.sh --num-demos 15            # or ./scripts/oracle.sh"
+log "  ./scripts/annotate.sh                         # add datagen_info for mimic"
+log "  ./scripts/mimic.sh   --num-demos 500          # curobo augmentation"
+log "  ./scripts/train.sh                            # train ACT"
+log "  ./scripts/eval.sh                             # rollout eval"

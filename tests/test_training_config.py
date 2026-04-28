@@ -1,4 +1,4 @@
-"""Validate the bundled training YAML config."""
+"""Validate the bundled defaults.yaml and per-task task.yaml files."""
 
 from __future__ import annotations
 
@@ -7,62 +7,104 @@ import pathlib
 import pytest
 import yaml
 
-CONFIG_PATH = (
-    pathlib.Path(__file__).resolve().parents[1]
-    / "src"
-    / "arm_vla"
-    / "training"
-    / "config.yaml"
-)
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+DEFAULTS_PATH = REPO_ROOT / "src" / "arm_vla" / "training" / "defaults.yaml"
+TASKS_ROOT = REPO_ROOT / "src" / "arm_vla" / "tasks"
 
 
-@pytest.fixture
-def config() -> dict:
-    with open(CONFIG_PATH) as f:
+def _read(p: pathlib.Path) -> dict:
+    with open(p) as f:
         return yaml.safe_load(f)
 
 
-def test_config_file_exists() -> None:
-    assert CONFIG_PATH.exists(), f"missing: {CONFIG_PATH}"
+@pytest.fixture
+def defaults() -> dict:
+    return _read(DEFAULTS_PATH)
 
 
-def test_has_required_top_level_sections(config: dict) -> None:
-    for section in ("model", "data", "lora", "training", "wandb"):
-        assert section in config, f"missing section: {section}"
+def test_defaults_file_exists() -> None:
+    assert DEFAULTS_PATH.is_file(), f"missing: {DEFAULTS_PATH}"
 
 
-def test_model_fields(config: dict) -> None:
-    assert "vla_path" in config["model"]
-    assert "attn_implementation" in config["model"]
+def test_defaults_has_required_sections(defaults: dict) -> None:
+    for section in ("data", "policy", "training", "eval", "collect", "mimic"):
+        assert section in defaults, f"missing section: {section}"
 
 
-def test_data_fields(config: dict) -> None:
-    for field in ("data_root_dir", "dataset_name", "image_aug", "shuffle_buffer_size"):
-        assert field in config["data"], f"missing data.{field}"
+def test_defaults_does_not_pin_task_specific_fields(defaults: dict) -> None:
+    # Task-specific stuff (gym ids, output paths, checkpoint paths) belongs
+    # in tasks/<task>/task.yaml — not the shared defaults.
+    assert "task" not in defaults
+    assert "hdf5_path" not in defaults.get("data", {})
+    assert "output_dir" not in defaults.get("training", {})
+    assert "checkpoint" not in defaults.get("eval", {})
 
 
-def test_training_fields(config: dict) -> None:
+def test_defaults_policy_fields(defaults: dict) -> None:
     required = (
-        "batch_size",
-        "grad_accum",
-        "learning_rate",
-        "warmup_steps",
-        "max_steps",
-        "save_every",
-        "log_every",
-        "bf16",
+        "chunk_size", "hidden_dim", "n_heads", "n_encoder_layers",
+        "n_decoder_layers", "dim_feedforward", "dropout", "pretrained_backbone",
     )
-    for field in required:
-        assert field in config["training"], f"missing training.{field}"
+    for f in required:
+        assert f in defaults["policy"], f"missing policy.{f}"
 
 
-def test_lora_target_modules_non_empty(config: dict) -> None:
-    targets = config["lora"]["target_modules"]
-    assert isinstance(targets, list) and len(targets) > 0
+def test_defaults_training_fields(defaults: dict) -> None:
+    required = (
+        "max_steps", "batch_size", "learning_rate", "warmup_steps",
+        "log_every", "save_every",
+    )
+    for f in required:
+        assert f in defaults["training"], f"missing training.{f}"
 
 
-def test_training_step_budgets_are_positive(config: dict) -> None:
-    train = config["training"]
-    assert train["max_steps"] > train["warmup_steps"] >= 0
-    assert train["batch_size"] > 0
-    assert train["grad_accum"] > 0
+def test_defaults_step_budgets_positive(defaults: dict) -> None:
+    t = defaults["training"]
+    assert t["max_steps"] > t["warmup_steps"] >= 0
+    assert t["batch_size"] > 0
+    e = defaults["eval"]
+    assert e["num_episodes"] > 0
+    assert e["max_steps_per_episode"] > 0
+
+
+def test_every_task_folder_has_only_task_yaml() -> None:
+    """Tasks should be YAML-only — no per-task .py needed for variants."""
+    for task_dir in TASKS_ROOT.iterdir():
+        if not task_dir.is_dir() or task_dir.name.startswith("_"):
+            continue
+        files = sorted(p.name for p in task_dir.iterdir() if not p.name.startswith("."))
+        assert files == ["task.yaml"], (
+            f"{task_dir} has unexpected files {files}; per-task code should "
+            f"live under tasks/_runtime/, not in the task folder."
+        )
+
+
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+def test_task_yaml_has_required_top_level_sections(task_yaml: pathlib.Path) -> None:
+    cfg = _read(task_yaml)
+    for section in ("task", "robot", "objects", "cameras", "success",
+                    "grasp_check", "oracle", "mimic", "data", "training", "eval"):
+        assert section in cfg, f"{task_yaml}: missing section {section!r}"
+
+
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+def test_task_yaml_has_pickable_and_target(task_yaml: pathlib.Path) -> None:
+    cfg = _read(task_yaml)
+    roles = [obj.get("role") for obj in cfg["objects"].values()]
+    assert "pickable" in roles, f"{task_yaml}: no object with role=pickable"
+    assert "target" in roles, f"{task_yaml}: no object with role=target"
+
+
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+def test_task_yaml_robot_lookup_key_is_known(task_yaml: pathlib.Path) -> None:
+    # Don't import the runtime (would pull in isaaclab); just check the
+    # robot.type field is non-empty and looks like a valid identifier.
+    cfg = _read(task_yaml)
+    rtype = cfg["robot"]["type"]
+    assert isinstance(rtype, str) and rtype.replace("_", "").isalnum()
+
+
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+def test_task_yaml_gym_ids_distinct(task_yaml: pathlib.Path) -> None:
+    cfg = _read(task_yaml)
+    assert cfg["task"]["gym_id"] != cfg["task"]["mimic_gym_id"]

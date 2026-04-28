@@ -1,9 +1,4 @@
-"""Shared helpers for sim rollout evaluations.
-
-Both ``rollout.py`` (fine-tuned) and ``zeroshot.py`` (pretrained baseline)
-share a task registry, video writer, and JSON summary writer. Kept here
-so the two CLIs stay in sync when a new task is added.
-"""
+"""Shared helpers for sim rollout evaluations: video + summary writers + logging."""
 
 from __future__ import annotations
 
@@ -13,33 +8,6 @@ import pathlib
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-
-TASK_REGISTRY: dict[str, dict[str, str]] = {
-    "pick_place": {
-        "gym_id": "Isaac-PickPlace-UR5-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur5_pick_place",
-        "cfg_path": "arm_vla.tasks.ur5_pick_place.pick_place_ur5_env_cfg:UR5PickPlaceEnvCfg",
-        # Match the instruction baked into the RLDS training data
-        # (data/rlds/ur5_pick_place/1.0.0 episodes set this string).
-        "instruction": "put the blue cube on the green target",
-        "unnorm_key": "ur5_pick_place",
-    },
-    "pick_place_ur10": {
-        "gym_id": "Isaac-PickPlace-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_pick_place",
-        "cfg_path": "arm_vla.tasks.ur10_pick_place.pick_place_ur10_env_cfg:UR10PickPlaceEnvCfg",
-        "instruction": "pick up the blue block and place it on the green pad",
-        "unnorm_key": "ur10_pick_place",
-    },
-    "stack": {
-        "gym_id": "Isaac-Stack-UR10-IK-Rel-v0",
-        "module": "arm_vla.tasks.ur10_stack",
-        "cfg_path": "arm_vla.tasks.ur10_stack.stack_ur10_env_cfg:UR10StackEnvCfg",
-        "instruction": "stack the blue block on top of the red block",
-        "unnorm_key": "ur10_pick_place",
-    },
-}
 
 
 def save_video(path: pathlib.Path, frames: list, fps: int = 15) -> None:

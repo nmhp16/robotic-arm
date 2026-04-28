@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Train ACT on the HDF5 demo file.
+# Train ACT for a task. Reads defaults.yaml + tasks/<task>/task.yaml.
 # Runs in the local training venv (not Isaac Lab's python).
+#   ./scripts/train.sh                          # uses --task pick_place
+#   ./scripts/train.sh --task pick_place --max-steps 1000
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,5 +20,4 @@ fi
 
 cd "$REPO_ROOT"
 source "$VENV_DIR/bin/activate"
-
 exec python -u -m arm_vla.training.train_act "$@"

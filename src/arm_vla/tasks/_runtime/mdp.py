@@ -1,4 +1,10 @@
-"""Task-specific MDP terms for UR5 + Robotiq 2F-85 pick-and-place."""
+"""Generic MDP terms for parametric pick-and-place tasks.
+
+The functions take ``SceneEntityCfg`` references plus the gripper threshold
++ driver-joint name as kwargs, so the same code serves any parallel-jaw
+task. The runtime builder wires the right names through ``params={...}``
+on each ObsTerm / DoneTerm.
+"""
 
 from __future__ import annotations
 
@@ -20,18 +26,12 @@ from isaaclab.sensors import Camera, FrameTransformer
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
-# Simple prismatic gripper sweeps 0 m (open) → 0.04 m (closed). Use the
-# left finger as the driver observation; threshold at 0.02 m splits the
-# travel in half.
-_GRIPPER_CLOSED_THRESHOLD = 0.02
-_DRIVER_JOINT_NAME = "finger_left_joint"
 
-
-def _gripper_drive_pos(env: ManagerBasedRLEnv) -> torch.Tensor | None:
-    """Driver-joint position per env, shape (N,). None if joint missing."""
+def _gripper_drive_pos(env: ManagerBasedRLEnv, joint_name: str) -> torch.Tensor | None:
+    """Driver-joint position per env, shape (N,). None if the joint is missing."""
     robot: Articulation = env.scene["robot"]
     try:
-        idx = robot.data.joint_names.index(_DRIVER_JOINT_NAME)
+        idx = robot.data.joint_names.index(joint_name)
     except ValueError:
         return None
     return robot.data.joint_pos[:, idx]
@@ -53,9 +53,12 @@ def ee_frame_quat(
     return ee_frame.data.target_quat_w[:, 0, :]
 
 
-def gripper_pos(env: ManagerBasedRLEnv) -> torch.Tensor:
-    """Driver-joint position per env, shape (N, 1). 0 ≈ open, ~0.7 ≈ closed."""
-    pos = _gripper_drive_pos(env)
+def gripper_pos(
+    env: ManagerBasedRLEnv,
+    driver_joint: str = "finger_left_joint",
+) -> torch.Tensor:
+    """Driver-joint position per env, shape (N, 1). 0 ≈ open."""
+    pos = _gripper_drive_pos(env, driver_joint)
     if pos is None:
         return torch.zeros((env.num_envs, 1), device=env.device)
     return pos.view(-1, 1)
@@ -81,52 +84,44 @@ def wrist_center_depth(
     return med.view(-1, 1)
 
 
-def cube_position(
+def object_position(
     env: ManagerBasedRLEnv,
-    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
 ) -> torch.Tensor:
-    cube: RigidObject = env.scene[cube_cfg.name]
-    return cube.data.root_pos_w - env.scene.env_origins
+    obj: RigidObject = env.scene[object_cfg.name]
+    return obj.data.root_pos_w - env.scene.env_origins
 
 
-def cube_orientation(
+def object_orientation(
     env: ManagerBasedRLEnv,
-    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
 ) -> torch.Tensor:
-    cube: RigidObject = env.scene[cube_cfg.name]
-    return cube.data.root_quat_w
-
-
-def target_position(
-    env: ManagerBasedRLEnv,
-    target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
-) -> torch.Tensor:
-    target: RigidObject = env.scene[target_cfg.name]
-    return target.data.root_pos_w - env.scene.env_origins
+    obj: RigidObject = env.scene[object_cfg.name]
+    return obj.data.root_quat_w
 
 
 def object_obs(
     env: ManagerBasedRLEnv,
-    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
 ) -> torch.Tensor:
-    cube: RigidObject = env.scene[cube_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
     target: RigidObject = env.scene[target_cfg.name]
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
 
-    cube_pos_w = cube.data.root_pos_w
-    cube_quat_w = cube.data.root_quat_w
+    obj_pos_w = obj.data.root_pos_w
+    obj_quat_w = obj.data.root_quat_w
     target_pos_w = target.data.root_pos_w
     ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
 
     return torch.cat(
         (
-            cube_pos_w - env.scene.env_origins,
-            cube_quat_w,
+            obj_pos_w - env.scene.env_origins,
+            obj_quat_w,
             target_pos_w - env.scene.env_origins,
-            cube_pos_w - ee_pos_w,
-            target_pos_w - cube_pos_w,
+            obj_pos_w - ee_pos_w,
+            target_pos_w - obj_pos_w,
         ),
         dim=1,
     )
@@ -137,44 +132,48 @@ def object_grasped(
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
 ) -> torch.Tensor:
-    """True when the gripper is closed and the cube is within
+    """True when the gripper is closed and the object is within
     ``diff_threshold`` m of the TCP."""
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
-    cube: RigidObject = env.scene[object_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
 
     dist = torch.linalg.vector_norm(
-        cube.data.root_pos_w - ee_frame.data.target_pos_w[:, 0, :], dim=1
+        obj.data.root_pos_w - ee_frame.data.target_pos_w[:, 0, :], dim=1
     )
-    close_to_cube = dist < diff_threshold
+    close_to_obj = dist < diff_threshold
 
-    pos = _gripper_drive_pos(env)
+    pos = _gripper_drive_pos(env, driver_joint)
     if pos is None:
-        return close_to_cube
-    gripper_closed = pos > _GRIPPER_CLOSED_THRESHOLD
-    return torch.logical_and(close_to_cube, gripper_closed)
+        return close_to_obj
+    gripper_closed = pos > closed_threshold
+    return torch.logical_and(close_to_obj, gripper_closed)
 
 
-def cube_on_target(
+def object_on_target(
     env: ManagerBasedRLEnv,
-    cube_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
     target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
     xy_threshold: float = 0.05,
     height_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
 ) -> torch.Tensor:
-    """True when the cube is within ``xy_threshold`` m of the target in xy,
-    within ``height_threshold`` m in z, and the gripper is open."""
-    cube: RigidObject = env.scene[cube_cfg.name]
+    """True when the object sits within (xy, height) thresholds of the target
+    AND the gripper is open."""
+    obj: RigidObject = env.scene[object_cfg.name]
     target: RigidObject = env.scene[target_cfg.name]
 
-    pos_diff = cube.data.root_pos_w - target.data.root_pos_w
+    pos_diff = obj.data.root_pos_w - target.data.root_pos_w
     xy_dist = torch.linalg.vector_norm(pos_diff[:, :2], dim=1)
 
     placed = torch.logical_and(xy_dist < xy_threshold, pos_diff[:, 2] < height_threshold)
     placed = torch.logical_and(placed, pos_diff[:, 2] > -0.02)
 
-    pos = _gripper_drive_pos(env)
+    pos = _gripper_drive_pos(env, driver_joint)
     if pos is None:
         return placed
-    gripper_open = pos < _GRIPPER_CLOSED_THRESHOLD
+    gripper_open = pos < closed_threshold
     return torch.logical_and(placed, gripper_open)

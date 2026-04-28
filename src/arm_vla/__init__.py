@@ -1,7 +1,3 @@
-"""ACT (Action Chunking Transformer) imitation pipeline for UR5 pick-and-place in Isaac Lab.
-
-A legacy UR10 + long-suction variant is registered alongside under the
-``ur10_pick_place`` and ``ur10_stack`` task packages.
-"""
+"""ACT (Action Chunking Transformer) imitation pipeline for UR5 + parallel-jaw pick-and-place in Isaac Lab."""
 
 __version__ = "0.1.0"

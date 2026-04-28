@@ -1,0 +1,56 @@
+# Default hyperparameters for the ACT training + sim-eval pipeline.
+#
+# These defaults apply to every task. Per-task overrides (gym ids, data
+# paths, output dirs) live in src/arm_vla/tasks/<task>/task.yaml and are
+# deep-merged onto these values at load time. CLI flags on train.sh /
+# eval.sh override individual fields without editing either YAML.
+#
+# Add a new task: copy src/arm_vla/tasks/pick_place/ to a new folder, edit
+# the task.yaml inside, and run `./scripts/train.sh --task <new_name>`.
+
+# --- Data -------------------------------------------------------------------
+data:
+  camera_keys:
+    - table_cam
+    - wrist_cam
+
+# --- Policy (ACT model) ------------------------------------------------------
+policy:
+  chunk_size: 50              # actions per forward pass (also the open-loop replay length at eval)
+  hidden_dim: 256
+  n_heads: 8
+  n_encoder_layers: 4
+  n_decoder_layers: 1
+  dim_feedforward: 1024
+  dropout: 0.1
+  pretrained_backbone: true   # ImageNet-init the per-camera ResNet18s
+
+# --- Training loop -----------------------------------------------------------
+training:
+  max_steps: 50000
+  batch_size: 64
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  warmup_steps: 500
+  log_every: 50
+  save_every: 5000
+  num_workers: 4
+
+# --- Sim rollout eval --------------------------------------------------------
+eval:
+  num_episodes: 20
+  max_steps_per_episode: 300
+  action_horizon: null         # null => chunk_size (full open-loop chunk replay)
+  output_dir: eval/runs
+  record_video: true
+
+# --- Data collection (teleop / oracle) --------------------------------------
+collect:
+  num_demos: 15
+  step_hz: 30
+  max_steps: 400               # oracle-only: per-episode step cap
+
+# --- Mimic augmentation -----------------------------------------------------
+mimic:
+  num_demos: 500
+  num_envs: 4
