@@ -1,15 +1,36 @@
-[tool.hatch.metadata]
-allow-direct-references = true
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
-name = "arm-vla"
+name = "arm-act"
 version = "0.1.0"
-description = "ACT imitation pipeline for Isaac Lab manipulation tasks (UR5 + parallel-jaw gripper, single-task per checkpoint)."
+description = "Action Chunking Transformer (ACT) imitation pipeline for Isaac Lab manipulation tasks. UR5 + parallel-jaw, sim-only, one task per checkpoint."
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.12"
-readme = "README.md"
+keywords = [
+    "robotics",
+    "imitation-learning",
+    "action-chunking-transformer",
+    "act",
+    "isaac-lab",
+    "isaac-sim",
+    "ur5",
+    "manipulation",
+    "behavior-cloning",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
 
-# torch is installed separately from NVIDIA's index; see README for the
-# platform-specific wheel command.
+# torch is installed separately from NVIDIA's CUDA index; see README for the
+# platform-specific wheel command. Listing it here would force the wrong build.
 dependencies = [
     "numpy>=1.24",
     "pyyaml>=6.0",
@@ -17,12 +38,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training-side deps. Installed into the local training venv.
+# Training-side deps installed into the local training venv.
 ml = [
     "torchvision>=0.18",  # ResNet18 backbone for the ACT image encoder
 ]
 
-# Eval-side deps. Installed into Isaac Lab's python.
+# Eval-side deps installed into Isaac Lab's python.
 sim = [
     "h5py>=3.10",
     "torchvision>=0.18",
@@ -34,12 +55,15 @@ dev = [
     "ruff>=0.6",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[project.urls]
+Repository = "https://github.com/nmhp16/robotic-arm"
+Issues = "https://github.com/nmhp16/robotic-arm/issues"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/arm_vla"]
+packages = ["src/arm_act"]
 
 [tool.ruff]
 line-length = 120
@@ -47,13 +71,12 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-# E501: line length handled by formatter, not linter.
-# B008: fires on Isaac Lab's declarative `SceneEntityCfg(...)` / `EventTerm(...)`
+# E501: line length handled by the formatter, not the linter.
+# B008: fires on Isaac Lab's declarative SceneEntityCfg(...) / EventTerm(...)
 #       field defaults — idiomatic for configclass-based envs.
 ignore = ["E501", "B008"]
 
 [tool.ruff.lint.pydocstyle]
-# If/when D-rules are enabled selectively, use Google-style docstrings.
 convention = "google"
 
 [tool.ruff.format]

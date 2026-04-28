@@ -1,30 +1,33 @@
-"""Annotate raw demos with mimic's datagen_info.
+"""Annotate raw demos with mimic ``datagen_info`` fields.
 
-Wraps Isaac Lab's ``scripts/imitation_learning/isaaclab_mimic/annotate_demos.py``.
-Plays each raw demo back inside the env to compute the DatagenInfo fields
-(eef_pose, object_pose, target_eef_pose, subtask_term_signals) required
-by the mimic generator.
+Wraps Isaac Lab's
+``scripts/imitation_learning/isaaclab_mimic/annotate_demos.py``. Replays
+each raw demo inside the env to compute the ``DatagenInfo`` fields
+(``eef_pose``, ``object_pose``, ``target_eef_pose``,
+``subtask_term_signals``) that the mimic generator requires.
 
-Default IO paths come from ``data.raw_path`` and ``data.annotated_path``
-in the task's task.yaml.
+Default I/O paths come from ``data.raw_path`` and ``data.annotated_path``
+in ``tasks/<task>.yaml``.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import runpy
 import sys
 
-from arm_vla.config import DEFAULT_TASK, load
+from arm_act.cli import isaaclab_script, register_tasks
+from arm_act.config import DEFAULT_TASK, load
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--task", default=DEFAULT_TASK)
-    p.add_argument("--input", type=pathlib.Path, default=None, help="default: data.raw_path")
-    p.add_argument("--output", type=pathlib.Path, default=None, help="default: data.annotated_path")
+    p.add_argument("--input", type=pathlib.Path, default=None,
+                   help="default: data.raw_path in tasks/<task>.yaml")
+    p.add_argument("--output", type=pathlib.Path, default=None,
+                   help="default: data.annotated_path in tasks/<task>.yaml")
     return p.parse_args()
 
 
@@ -32,18 +35,16 @@ def main() -> int:
     args = _parse_args()
     cfg = load(args.task)
 
-    isaaclab = pathlib.Path(os.environ.get("ISAACLAB", os.path.expanduser("~/IsaacLab")))
-    annotate = isaaclab / "scripts" / "imitation_learning" / "isaaclab_mimic" / "annotate_demos.py"
-    if not annotate.is_file():
-        print(f"could not find {annotate} — set ISAACLAB=...", file=sys.stderr)
-        return 2
-
-    __import__("arm_vla.tasks")  # auto-registers every task's gym ids
+    annotate = isaaclab_script("scripts/imitation_learning/isaaclab_mimic/annotate_demos.py")
+    register_tasks()
 
     in_path = pathlib.Path(args.input or cfg["data"]["raw_path"])
     out_path = pathlib.Path(args.output or cfg["data"]["annotated_path"])
     if not in_path.is_file():
-        print(f"input not found: {in_path} — run ./scripts/teleop.sh or ./scripts/oracle.sh first", file=sys.stderr)
+        print(
+            f"input not found: {in_path} — run ./scripts/teleop.sh or ./scripts/oracle.sh first",
+            file=sys.stderr,
+        )
         return 2
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

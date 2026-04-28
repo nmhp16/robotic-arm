@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from torchvision.models import resnet18, ResNet18_Weights
 from torchvision.models.feature_extraction import create_feature_extractor
 
-from arm_vla.training.dataset import NormStats
+from arm_act.training.dataset import NormStats
 
 # ImageNet stats for ResNet18 inputs.
 _IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)

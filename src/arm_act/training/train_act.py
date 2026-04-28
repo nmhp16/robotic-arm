@@ -1,7 +1,7 @@
 """Train ACT on the HDF5 demo file for a given task.
 
-Reads ``src/arm_vla/training/defaults.yaml`` and overlays
-``src/arm_vla/tasks/<task>/task.yaml`` (deep-merge). Trains the ACT model
+Reads ``src/arm_act/training/defaults.yaml`` and overlays
+``src/arm_act/tasks/<task>.yaml`` (deep-merge). Trains the ACT model
 defined in ``act_policy.py`` with L1 loss; saves the policy + norm stats
 to ``training.output_dir`` every ``training.save_every`` steps.
 
@@ -22,22 +22,22 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from arm_vla.config import DEFAULT_TASK, load as load_config
-from arm_vla.training.act_policy import (
+from arm_act.config import DEFAULT_TASK, load as load_config
+from arm_act.training.act_policy import (
     ACTConfig,
     ACTModel,
     normalize_actions,
     normalize_states,
     save_policy,
 )
-from arm_vla.training.dataset import HDF5DemoDataset, collate
+from arm_act.training.dataset import HDF5DemoDataset, collate
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--task", default=DEFAULT_TASK, help="task name under src/arm_vla/tasks/")
+    p.add_argument("--task", default=DEFAULT_TASK, help="task name under src/arm_act/tasks/")
     # Optional ad-hoc overrides — handy for quick tests without editing the YAML.
     p.add_argument("--output-dir", type=pathlib.Path, default=None)
     p.add_argument("--max-steps", type=int, default=None)

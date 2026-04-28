@@ -1,31 +1,37 @@
-"""Augment annotated demos via curobo (isaaclab_mimic).
+"""Augment annotated demos via curobo (``isaaclab_mimic``).
 
-Wraps Isaac Lab's ``scripts/imitation_learning/isaaclab_mimic/generate_dataset.py``.
-Runs segment replay across randomized scenes and writes a much larger
-HDF5 (``data.augmented_path``) suitable for ACT training.
+Wraps Isaac Lab's
+``scripts/imitation_learning/isaaclab_mimic/generate_dataset.py``. Runs
+segment replay across randomized scenes and writes a much larger HDF5
+suitable for ACT training.
 
-Defaults: ``data.annotated_path`` → ``data.augmented_path`` from task.yaml,
-plus ``mimic.num_demos`` / ``mimic.num_envs`` from defaults.yaml.
+Defaults: ``data.annotated_path`` → ``data.augmented_path`` from
+``tasks/<task>.yaml``, plus ``mimic.num_demos`` and ``mimic.num_envs``
+from ``defaults.yaml``.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import runpy
 import sys
 
-from arm_vla.config import DEFAULT_TASK, load
+from arm_act.cli import isaaclab_script, register_tasks
+from arm_act.config import DEFAULT_TASK, load
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--task", default=DEFAULT_TASK)
-    p.add_argument("--input", type=pathlib.Path, default=None, help="default: data.annotated_path")
-    p.add_argument("--output", type=pathlib.Path, default=None, help="default: data.augmented_path")
-    p.add_argument("--num-demos", type=int, default=None, help="default: mimic.num_demos")
-    p.add_argument("--num-envs", type=int, default=None, help="default: mimic.num_envs")
+    p.add_argument("--input", type=pathlib.Path, default=None,
+                   help="default: data.annotated_path in tasks/<task>.yaml")
+    p.add_argument("--output", type=pathlib.Path, default=None,
+                   help="default: data.augmented_path in tasks/<task>.yaml")
+    p.add_argument("--num-demos", type=int, default=None,
+                   help="default: mimic.num_demos in defaults.yaml")
+    p.add_argument("--num-envs", type=int, default=None,
+                   help="default: mimic.num_envs in defaults.yaml")
     return p.parse_args()
 
 
@@ -33,18 +39,16 @@ def main() -> int:
     args = _parse_args()
     cfg = load(args.task)
 
-    isaaclab = pathlib.Path(os.environ.get("ISAACLAB", os.path.expanduser("~/IsaacLab")))
-    generate = isaaclab / "scripts" / "imitation_learning" / "isaaclab_mimic" / "generate_dataset.py"
-    if not generate.is_file():
-        print(f"could not find {generate} — set ISAACLAB=...", file=sys.stderr)
-        return 2
-
-    __import__("arm_vla.tasks")  # auto-registers every task's gym ids
+    generate = isaaclab_script("scripts/imitation_learning/isaaclab_mimic/generate_dataset.py")
+    register_tasks()
 
     in_path = pathlib.Path(args.input or cfg["data"]["annotated_path"])
     out_path = pathlib.Path(args.output or cfg["data"]["augmented_path"])
     if not in_path.is_file():
-        print(f"input not found: {in_path} — run ./scripts/annotate.sh first", file=sys.stderr)
+        print(
+            f"input not found: {in_path} — run ./scripts/annotate.sh first",
+            file=sys.stderr,
+        )
         return 2
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

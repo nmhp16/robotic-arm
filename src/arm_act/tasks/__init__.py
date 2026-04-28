@@ -7,7 +7,7 @@ For each ``tasks/<name>.yaml`` we build three classes from the spec:
 * ``<Name>MimicEnv``      — mimic runtime class
 
 Classes are stashed on this module so ``gym.register`` can resolve their
-``module:Class`` entry-point strings (``arm_vla.tasks:<ClassName>``).
+``module:Class`` entry-point strings (``arm_act.tasks:<ClassName>``).
 
 To add a new task variant: drop a ``tasks/<your_task>.yaml`` next to
 ``pick_place.yaml`` — the next process import re-scans and registers it.
@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import gymnasium as gym
 
-from arm_vla.config import list_tasks, load
-from arm_vla.tasks._runtime.env_cfg import build_env_cfg
-from arm_vla.tasks._runtime.mimic_env import build_mimic_env
-from arm_vla.tasks._runtime.mimic_env_cfg import build_mimic_env_cfg
+from arm_act.config import list_tasks, load
+from arm_act.tasks._runtime.env_cfg import build_env_cfg
+from arm_act.tasks._runtime.mimic_env import build_mimic_env
+from arm_act.tasks._runtime.mimic_env_cfg import build_mimic_env_cfg
 
 
 def _class_prefix(task_name: str) -> str:
@@ -46,13 +46,13 @@ def _register_all() -> None:
         gym.register(
             id=spec["task"]["gym_id"],
             entry_point="isaaclab.envs:ManagerBasedRLEnv",
-            kwargs={"env_cfg_entry_point": f"arm_vla.tasks:{env_cfg_cls.__name__}"},
+            kwargs={"env_cfg_entry_point": f"arm_act.tasks:{env_cfg_cls.__name__}"},
             disable_env_checker=True,
         )
         gym.register(
             id=spec["task"]["mimic_gym_id"],
-            entry_point=f"arm_vla.tasks:{mimic_env_cls.__name__}",
-            kwargs={"env_cfg_entry_point": f"arm_vla.tasks:{mimic_cfg_cls.__name__}"},
+            entry_point=f"arm_act.tasks:{mimic_env_cls.__name__}",
+            kwargs={"env_cfg_entry_point": f"arm_act.tasks:{mimic_cfg_cls.__name__}"},
             disable_env_checker=True,
         )
 

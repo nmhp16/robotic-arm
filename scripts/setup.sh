@@ -7,7 +7,7 @@
 # are reused.
 #
 # Env overrides:
-#   ARM_VLA_VENV   training venv path (default: $HOME/arm-vla-venv)
+#   ARM_ACT_VENV   training venv path (default: $HOME/arm-act-venv)
 #   ISAACLAB       Isaac Lab install (default: $HOME/IsaacLab)
 #   PYTHON         system python (default: python3.12 if available, else python3)
 #   SKIP_USD       set to skip URDF->USD conversion (e.g. if already done)
@@ -19,7 +19,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"
 
-ARM_VLA_VENV="${ARM_VLA_VENV:-$HOME/arm-vla-venv}"
+ARM_ACT_VENV="${ARM_ACT_VENV:-$HOME/arm-act-venv}"
 ISAACLAB="${ISAACLAB:-$HOME/IsaacLab}"
 PYTHON="${PYTHON:-$(command -v python3.12 || command -v python3)}"
 
@@ -31,14 +31,14 @@ die() { printf '[setup] ERROR: %s\n' "$*" >&2; exit 1; }
 log "using PYTHON=$PYTHON ($($PYTHON --version 2>&1))"
 
 # ---------- 1. Training venv ----------------------------------------------
-if [[ -d "$ARM_VLA_VENV" ]]; then
-    log "training venv exists at $ARM_VLA_VENV"
+if [[ -d "$ARM_ACT_VENV" ]]; then
+    log "training venv exists at $ARM_ACT_VENV"
 else
-    log "creating training venv at $ARM_VLA_VENV"
-    "$PYTHON" -m venv "$ARM_VLA_VENV"
+    log "creating training venv at $ARM_ACT_VENV"
+    "$PYTHON" -m venv "$ARM_ACT_VENV"
 fi
 # shellcheck disable=SC1091
-source "$ARM_VLA_VENV/bin/activate"
+source "$ARM_ACT_VENV/bin/activate"
 pip install --upgrade pip wheel >/dev/null
 
 if [[ -z "${SKIP_TORCH:-}" ]]; then
@@ -52,7 +52,7 @@ if [[ -z "${SKIP_TORCH:-}" ]]; then
     fi
 fi
 
-log "installing arm-vla[ml] into training venv"
+log "installing arm-act[ml] into training venv"
 pip install -e "$REPO_ROOT[ml]"
 
 # ---------- 2. Isaac Lab pip install --------------------------------------
@@ -60,7 +60,7 @@ if [[ -z "${SKIP_ISAAC:-}" ]]; then
     if [[ ! -x "$ISAACLAB/isaaclab.sh" ]]; then
         warn "Isaac Lab not found at $ISAACLAB — set ISAACLAB=... and re-run, or use SKIP_ISAAC=1"
     else
-        log "installing arm-vla[sim] into Isaac Lab's python ($ISAACLAB)"
+        log "installing arm-act[sim] into Isaac Lab's python ($ISAACLAB)"
         env -u VIRTUAL_ENV -u CONDA_PREFIX "$ISAACLAB/isaaclab.sh" -p -m pip install -e "$REPO_ROOT[sim]"
     fi
 fi
@@ -87,8 +87,8 @@ fi
 
 log "done."
 log ""
-log "task config lives at:    src/arm_vla/tasks/<task>/task.yaml"
-log "shared hyperparams at:   src/arm_vla/training/defaults.yaml"
+log "task config lives at:    src/arm_act/tasks/<task>.yaml"
+log "shared hyperparams at:   src/arm_act/training/defaults.yaml"
 log ""
 log "next steps (default --task pick_place):"
 log "  ./scripts/teleop.sh --num-demos 15            # or ./scripts/oracle.sh"

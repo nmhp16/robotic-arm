@@ -1,4 +1,4 @@
-"""Tests for ``arm_vla.config.load`` and the deep-merge overlay."""
+"""Tests for ``arm_act.config.load`` and the deep-merge overlay."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import textwrap
 
 
 def test_list_tasks_includes_pick_place() -> None:
-    from arm_vla.config import list_tasks
+    from arm_act.config import list_tasks
 
     assert "pick_place" in list_tasks()
 
 
 def test_load_default_task_returns_dict() -> None:
-    from arm_vla.config import load
+    from arm_act.config import load
 
     cfg = load()  # default task = pick_place
     assert isinstance(cfg, dict)
@@ -25,7 +25,7 @@ def test_load_default_task_returns_dict() -> None:
 
 
 def test_load_pick_place_overlays_task_fields() -> None:
-    from arm_vla.config import load
+    from arm_act.config import load
 
     cfg = load("pick_place")
     # Overlay (task.yaml) wins on these:
@@ -42,14 +42,14 @@ def test_load_pick_place_overlays_task_fields() -> None:
 def test_load_unknown_task_raises() -> None:
     import pytest
 
-    from arm_vla.config import load
+    from arm_act.config import load
 
     with pytest.raises(FileNotFoundError):
         load("does_not_exist_task_name_12345")
 
 
 def test_load_custom_defaults_path(tmp_path) -> None:
-    from arm_vla.config import load
+    from arm_act.config import load
 
     custom = tmp_path / "alt_defaults.yaml"
     custom.write_text(

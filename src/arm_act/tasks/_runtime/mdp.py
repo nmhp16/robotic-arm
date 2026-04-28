@@ -86,7 +86,7 @@ def wrist_center_depth(
 
 def object_position(
     env: ManagerBasedRLEnv,
-    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
 ) -> torch.Tensor:
     obj: RigidObject = env.scene[object_cfg.name]
     return obj.data.root_pos_w - env.scene.env_origins
@@ -94,7 +94,7 @@ def object_position(
 
 def object_orientation(
     env: ManagerBasedRLEnv,
-    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
 ) -> torch.Tensor:
     obj: RigidObject = env.scene[object_cfg.name]
     return obj.data.root_quat_w
@@ -102,7 +102,7 @@ def object_orientation(
 
 def object_obs(
     env: ManagerBasedRLEnv,
-    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
     target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
 ) -> torch.Tensor:
@@ -130,7 +130,7 @@ def object_obs(
 def object_grasped(
     env: ManagerBasedRLEnv,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
-    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
     diff_threshold: float = 0.06,
     driver_joint: str = "finger_left_joint",
     closed_threshold: float = 0.02,
@@ -154,7 +154,7 @@ def object_grasped(
 
 def object_on_target(
     env: ManagerBasedRLEnv,
-    object_cfg: SceneEntityCfg = SceneEntityCfg("cube"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
     target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
     xy_threshold: float = 0.05,
     height_threshold: float = 0.06,

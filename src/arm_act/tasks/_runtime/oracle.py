@@ -86,7 +86,7 @@ def _parse_args(default_dataset: str, default_max_steps: int) -> argparse.Namesp
 
 
 def main(spec: dict[str, Any]) -> int:
-    """Entry point invoked by ``arm_vla.cli.oracle``."""
+    """Entry point invoked by ``arm_act.cli.oracle``."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -106,7 +106,7 @@ def main(spec: dict[str, Any]) -> int:
         from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
         from isaaclab.managers.recorder_manager import DatasetExportMode
 
-        import arm_vla.tasks  # noqa: F401  triggers task auto-registration
+        import arm_act.tasks  # noqa: F401  triggers task auto-registration
 
         gym_id = spec["task"]["gym_id"]
         env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
@@ -143,7 +143,7 @@ def main(spec: dict[str, Any]) -> int:
 
             for step in range(args.max_steps):
                 tcp = obs["policy"]["eef_pos"][0].cpu().numpy()
-                pickable_now = obs["policy"]["cube_pos"][0].cpu().numpy()
+                pickable_now = obs["policy"]["pickable_pos"][0].cpu().numpy()
                 target_now = obs["policy"]["target_pos"][0].cpu().numpy()
                 gripper_rad = float(obs["policy"]["gripper_pos"][0, 0].cpu())
 
@@ -278,5 +278,5 @@ def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams):
 
 if __name__ == "__main__":
     # Standalone: load default task config, then run.
-    from arm_vla.config import DEFAULT_TASK, load
+    from arm_act.config import DEFAULT_TASK, load
     sys.exit(main(load(DEFAULT_TASK)))

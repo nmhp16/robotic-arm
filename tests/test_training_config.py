@@ -8,8 +8,8 @@ import pytest
 import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULTS_PATH = REPO_ROOT / "src" / "arm_vla" / "training" / "defaults.yaml"
-TASKS_ROOT = REPO_ROOT / "src" / "arm_vla" / "tasks"
+DEFAULTS_PATH = REPO_ROOT / "src" / "arm_act" / "training" / "defaults.yaml"
+TASKS_ROOT = REPO_ROOT / "src" / "arm_act" / "tasks"
 
 
 def _read(p: pathlib.Path) -> dict:
@@ -33,7 +33,7 @@ def test_defaults_has_required_sections(defaults: dict) -> None:
 
 def test_defaults_does_not_pin_task_specific_fields(defaults: dict) -> None:
     # Task-specific stuff (gym ids, output paths, checkpoint paths) belongs
-    # in tasks/<task>/task.yaml — not the shared defaults.
+    # in tasks/<task>.yaml — not the shared defaults.
     assert "task" not in defaults
     assert "hdf5_path" not in defaults.get("data", {})
     assert "output_dir" not in defaults.get("training", {})
@@ -67,19 +67,21 @@ def test_defaults_step_budgets_positive(defaults: dict) -> None:
     assert e["max_steps_per_episode"] > 0
 
 
-def test_every_task_folder_has_only_task_yaml() -> None:
-    """Tasks should be YAML-only — no per-task .py needed for variants."""
-    for task_dir in TASKS_ROOT.iterdir():
-        if not task_dir.is_dir() or task_dir.name.startswith("_"):
-            continue
-        files = sorted(p.name for p in task_dir.iterdir() if not p.name.startswith("."))
-        assert files == ["task.yaml"], (
-            f"{task_dir} has unexpected files {files}; per-task code should "
-            f"live under tasks/_runtime/, not in the task folder."
-        )
+def test_only_task_yamls_under_tasks_root() -> None:
+    """Tasks should be YAML-only — flat ``tasks/<name>.yaml`` files."""
+    yamls = sorted(p.name for p in TASKS_ROOT.glob("*.yaml"))
+    assert yamls, "no task yaml files under tasks/"
+    # No straggler .yml or per-task subfolders.
+    subdirs = sorted(
+        p.name for p in TASKS_ROOT.iterdir()
+        if p.is_dir() and not p.name.startswith("_") and p.name != "__pycache__"
+    )
+    assert subdirs == [], (
+        f"unexpected task subfolders {subdirs}; tasks should be flat YAML files"
+    )
 
 
-@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*.yaml")))
 def test_task_yaml_has_required_top_level_sections(task_yaml: pathlib.Path) -> None:
     cfg = _read(task_yaml)
     for section in ("task", "robot", "objects", "cameras", "success",
@@ -87,7 +89,7 @@ def test_task_yaml_has_required_top_level_sections(task_yaml: pathlib.Path) -> N
         assert section in cfg, f"{task_yaml}: missing section {section!r}"
 
 
-@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*.yaml")))
 def test_task_yaml_has_pickable_and_target(task_yaml: pathlib.Path) -> None:
     cfg = _read(task_yaml)
     roles = [obj.get("role") for obj in cfg["objects"].values()]
@@ -95,7 +97,7 @@ def test_task_yaml_has_pickable_and_target(task_yaml: pathlib.Path) -> None:
     assert "target" in roles, f"{task_yaml}: no object with role=target"
 
 
-@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*.yaml")))
 def test_task_yaml_robot_lookup_key_is_known(task_yaml: pathlib.Path) -> None:
     # Don't import the runtime (would pull in isaaclab); just check the
     # robot.type field is non-empty and looks like a valid identifier.
@@ -104,7 +106,7 @@ def test_task_yaml_robot_lookup_key_is_known(task_yaml: pathlib.Path) -> None:
     assert isinstance(rtype, str) and rtype.replace("_", "").isalnum()
 
 
-@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*/task.yaml")))
+@pytest.mark.parametrize("task_yaml", sorted(TASKS_ROOT.glob("*.yaml")))
 def test_task_yaml_gym_ids_distinct(task_yaml: pathlib.Path) -> None:
     cfg = _read(task_yaml)
     assert cfg["task"]["gym_id"] != cfg["task"]["mimic_gym_id"]

@@ -1,6 +1,6 @@
 """Evaluate a trained ACT checkpoint via Isaac Lab sim rollouts.
 
-Reads ``defaults.yaml`` overlaid with ``tasks/<task>/task.yaml`` for the
+Reads ``defaults.yaml`` overlaid with ``tasks/<task>.yaml`` for the
 task's gym id and eval defaults. Runs N episodes, writes per-episode mp4 +
 ``summary.json`` to ``<eval.output_dir>/<timestamp>/``.
 
@@ -20,15 +20,15 @@ import time
 
 from isaaclab.app import AppLauncher
 
-from arm_vla.config import DEFAULT_TASK, load as load_config
-from arm_vla.eval.common import save_summary, save_video, setup_logging
+from arm_act.config import DEFAULT_TASK, load as load_config
+from arm_act.eval.common import save_summary, save_video, setup_logging
 
 logger = logging.getLogger(__name__)
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--task", default=DEFAULT_TASK, help="task name under src/arm_vla/tasks/")
+    p.add_argument("--task", default=DEFAULT_TASK, help="task name under src/arm_act/tasks/")
     # All overrides are optional; default to the value in the merged config.
     p.add_argument("--checkpoint", type=pathlib.Path, default=None)
     p.add_argument("--num-episodes", type=int, default=None)
@@ -78,9 +78,9 @@ def main() -> int:
         import numpy as np
         import torch
 
-        from arm_vla.training.act_policy import load_policy
+        from arm_act.training.act_policy import load_policy
 
-        importlib.import_module("arm_vla.tasks")  # triggers task auto-registration
+        importlib.import_module("arm_act.tasks")  # triggers task auto-registration
 
         policy = load_policy(checkpoint, device="cuda")
         if action_horizon_override is not None:

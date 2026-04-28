@@ -171,8 +171,8 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         "target_cfg": SceneEntityCfg("target"),
         "ee_frame_cfg": SceneEntityCfg("ee_frame"),
     }
-    pol.cube_pos.params = {"object_cfg": SceneEntityCfg("pickable")}
-    pol.cube_quat.params = {"object_cfg": SceneEntityCfg("pickable")}
+    pol.pickable_pos.params = {"object_cfg": SceneEntityCfg("pickable")}
+    pol.pickable_quat.params = {"object_cfg": SceneEntityCfg("pickable")}
     pol.target_pos.params = {"object_cfg": SceneEntityCfg("target")}
     pol.gripper_pos.params = {"driver_joint": driver_joint}
 

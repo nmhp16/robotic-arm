@@ -16,7 +16,7 @@ env/
 .idea/
 
 # Generated data + checkpoints. Leading `/` anchors these to the repo root
-# so they don't also swallow `src/arm_vla/data/` etc.
+# so they don't also swallow `src/arm_act/data/` etc.
 /data/
 /checkpoints/
 /wandb/

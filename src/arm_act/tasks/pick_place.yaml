@@ -1,7 +1,7 @@
 # Full task spec for pick_place. Everything the runtime needs to wire up
 # the env, oracle, mimic config, and ACT trainer lives here. No Python
-# required — copy this file to a new tasks/<your_task>/task.yaml, edit
-# the fields, and run ./scripts/train.sh --task <your_task>.
+# required — copy this file to tasks/<your_task>.yaml, edit the fields,
+# and run ./scripts/train.sh --task <your_task>.
 
 task:
   name: pick_place
@@ -11,7 +11,7 @@ task:
   mimic_gym_id: Isaac-PickPlace-UR5-IK-Rel-Mimic-v0
 
 # --- Robot ------------------------------------------------------------------
-# Lookup key into the robot library (see arm_vla/tasks/_runtime/robot_cfg.py).
+# Lookup key into the robot library (see arm_act/tasks/_runtime/robot_cfg.py).
 # tcp_z_offset = distance from tool0_aligned to TCP between fingertips.
 # Gripper commands are joint position targets fed into BinaryJointPositionActionCfg.
 robot:
@@ -91,7 +91,7 @@ grasp_check:
 
 # --- Scripted oracle (state machine) ---------------------------------------
 # Heights in meters; the state machine is hover→descend→grasp→lift→move→place→release
-# and is implemented in arm_vla/tasks/_runtime/oracle.py — these knobs tune
+# and is implemented in arm_act/tasks/_runtime/oracle.py — these knobs tune
 # the trajectory.
 oracle:
   hover_height: 0.15            # m above pickable centroid before descent

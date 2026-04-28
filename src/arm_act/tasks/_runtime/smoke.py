@@ -50,7 +50,7 @@ def _run(args: argparse.Namespace, spec: dict) -> int:
         import numpy as np
         import torch
 
-        import arm_vla.tasks  # noqa: F401  triggers task auto-registration
+        import arm_act.tasks  # noqa: F401  triggers task auto-registration
 
         gym_id = spec["task"]["gym_id"]
         env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
@@ -187,5 +187,5 @@ def main(spec: dict) -> int:
 
 
 if __name__ == "__main__":
-    from arm_vla.config import DEFAULT_TASK, load
+    from arm_act.config import DEFAULT_TASK, load
     sys.exit(main(load(DEFAULT_TASK)))

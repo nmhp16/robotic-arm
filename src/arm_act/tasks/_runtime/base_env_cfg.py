@@ -73,8 +73,8 @@ class ObservationsCfg:
         joint_vel = ObsTerm(func=mdp.joint_vel_rel)
         # The builder fills in `params` so these point at the right scene entities.
         object = ObsTerm(func=mdp.object_obs)
-        cube_pos = ObsTerm(func=mdp.object_position)
-        cube_quat = ObsTerm(func=mdp.object_orientation)
+        pickable_pos = ObsTerm(func=mdp.object_position)
+        pickable_quat = ObsTerm(func=mdp.object_orientation)
         target_pos = ObsTerm(func=mdp.object_position)
         eef_pos = ObsTerm(func=mdp.ee_frame_pos)
         eef_quat = ObsTerm(func=mdp.ee_frame_quat)

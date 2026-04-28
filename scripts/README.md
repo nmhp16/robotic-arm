@@ -1,27 +1,45 @@
 # Scripts
 
-Thin shell wrappers around the Python entry points. Each script picks
-the right Python environment (Isaac Lab's bundled python for sim work,
-the local training venv for ACT training) and forwards all flags through.
+One-line shell wrappers around the Python entry points. Each script
+selects the right Python environment (Isaac Lab's bundled python for sim
+work, the local training venv for ACT training) and forwards every flag
+through to the underlying module.
 
-| Script              | Env        | Wraps                              | Purpose                                    |
-|---------------------|------------|------------------------------------|--------------------------------------------|
-| `setup.sh`          | both       | —                                  | Bootstrap: training venv, install, URDF→USD |
-| `smoke.sh`          | Isaac Lab  | `arm_vla.cli.smoke`                | Scene preview / sanity check               |
-| `teleop.sh`         | Isaac Lab  | `arm_vla.cli.teleop`               | Record keyboard demos                      |
-| `oracle.sh`         | Isaac Lab  | `arm_vla.cli.oracle`               | Scripted oracle demo collection            |
-| `annotate.sh`       | Isaac Lab  | `arm_vla.cli.annotate`             | Add datagen_info to raw demos              |
-| `mimic.sh`          | Isaac Lab  | `arm_vla.cli.mimic`                | Curobo-based augmentation                  |
-| `train.sh`          | training   | `arm_vla.training.train_act`       | Train ACT                                  |
-| `eval.sh`           | Isaac Lab  | `arm_vla.eval.rollout`             | Sim rollouts of a trained checkpoint       |
+| Script         | Environment | Wraps                          | Purpose                                      |
+|----------------|-------------|--------------------------------|----------------------------------------------|
+| `setup.sh`     | both        | —                              | Bootstrap: training venv, install, URDF→USD  |
+| `smoke.sh`     | Isaac Lab   | `arm_act.cli.smoke`            | Scene preview / sanity check                 |
+| `teleop.sh`    | Isaac Lab   | `arm_act.cli.teleop`           | Record keyboard demos                        |
+| `oracle.sh`    | Isaac Lab   | `arm_act.cli.oracle`           | Scripted oracle demo collection              |
+| `annotate.sh`  | Isaac Lab   | `arm_act.cli.annotate`         | Add ``datagen_info`` for mimic               |
+| `mimic.sh`     | Isaac Lab   | `arm_act.cli.mimic`            | Curobo-based augmentation                    |
+| `train.sh`     | training    | `arm_act.training.train_act`   | Train ACT                                    |
+| `eval.sh`      | Isaac Lab   | `arm_act.eval.rollout`         | Sim rollouts of a trained checkpoint         |
 
-Every script accepts `--task <name>` (default: `pick_place`). Other
-defaults come from:
+## Conventions
 
-* `src/arm_vla/training/defaults.yaml` (shared hyperparams)
-* `src/arm_vla/tasks/<task>/task.yaml` (task-specific overrides)
+Every script except `setup.sh` accepts `--task <name>` (default:
+`pick_place`). Other defaults come from:
 
-CLI flags override both YAMLs.
+- `src/arm_act/training/defaults.yaml` — shared hyperparameters
+- `src/arm_act/tasks/<task>.yaml` — task-specific overrides
 
-Isaac Lab entry: `$ISAACLAB/isaaclab.sh -p` (defaults to `~/IsaacLab`).
-Training venv: `$ARM_VLA_VENV` (defaults to `~/arm-vla-venv`).
+CLI flags override both YAMLs. Run any script with `--help` for its
+exact flag list.
+
+## Environment variables
+
+| Variable        | Default           | Effect                                |
+|-----------------|-------------------|---------------------------------------|
+| `ISAACLAB`      | `~/IsaacLab`      | Isaac Lab install root                |
+| `ARM_ACT_VENV`  | `~/arm-act-venv`  | Training venv location                |
+| `PYTHON`        | `python3.12`      | System python used by `setup.sh`      |
+| `SKIP_TORCH`    | (unset)           | `setup.sh`: skip torch wheels install |
+| `SKIP_ISAAC`    | (unset)           | `setup.sh`: skip Isaac Lab pip install|
+| `SKIP_USD`      | (unset)           | `setup.sh`: skip URDF→USD conversion  |
+
+## Helper scripts
+
+- `convert_ur5_simple_gripper.py` — one-shot URDF→USD converter for the
+  bundled robot. Run via `setup.sh` (idempotent); only needed manually
+  if you edit the URDF.

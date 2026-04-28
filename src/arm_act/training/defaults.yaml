@@ -1,12 +1,13 @@
 # Default hyperparameters for the ACT training + sim-eval pipeline.
 #
 # These defaults apply to every task. Per-task overrides (gym ids, data
-# paths, output dirs) live in src/arm_vla/tasks/<task>/task.yaml and are
+# paths, output dirs) live in src/arm_act/tasks/<task>.yaml and are
 # deep-merged onto these values at load time. CLI flags on train.sh /
 # eval.sh override individual fields without editing either YAML.
 #
-# Add a new task: copy src/arm_vla/tasks/pick_place/ to a new folder, edit
-# the task.yaml inside, and run `./scripts/train.sh --task <new_name>`.
+# Add a new task: copy src/arm_act/tasks/pick_place.yaml to
+# src/arm_act/tasks/<new_name>.yaml, edit it, and run
+# `./scripts/train.sh --task <new_name>`.
 
 # --- Data -------------------------------------------------------------------
 data:
