@@ -1,0 +1,183 @@
+# Put the plant BACK into the jar. Phase 2 of the two-phase task.
+#
+# Uses the new _runtime_jar template (sibling of _runtime) which extends
+# the standard archetype with an INSERT phase for descending below the
+# target's z (into the jar cavity) and a RETRACT phase that lifts the
+# gripper out of the jar before the episode ends. This is essential
+# because the default _runtime's RELEASE just opens the gripper and the
+# episode terminates with the arm still inside the jar -- mimic
+# augmentation then learns trajectories that get stuck.
+#
+# State machine (see _runtime_jar/oracle.py):
+#   HOVER -> DESCEND -> GRASP -> LIFT -> MOVE -> ALIGN -> INSERT
+#         -> RELEASE -> RETRACT
+#
+# To run:
+#   ./scripts/oracle.sh   --task put_plant_back --num-demos 15
+#   ./scripts/annotate.sh --task put_plant_back
+#   ./scripts/mimic.sh    --task put_plant_back --num-demos 500
+#   ./scripts/train.sh    --task put_plant_back
+#   ./scripts/eval.sh     --task put_plant_back
+#
+# Tip: scripted oracle for insertion is brittle (one bad waypoint = stuck
+# in jar wall). If oracle.sh succeeds <50% of the time, switch to keyboard
+# teleop for demo collection: ./scripts/teleop.sh --task put_plant_back
+
+# Use the orientation-aware insertion template.
+template: _runtime_jar
+
+task:
+  name: put_plant_back
+  instruction: pick the plant from the tray and place it back inside the jar
+  gym_id: Isaac-PutPlantBack-UR5-IK-Rel-v0
+  mimic_gym_id: Isaac-PutPlantBack-UR5-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+robot:
+  type: ur5_simple_gripper
+  tcp_z_offset: 0.08
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.04
+  gripper_closed_threshold: 0.02
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# The plant starts on the tray (off to +y); the jar is the target (in
+# front of the arm, kinematic so it doesn't fall over when the gripper
+# brushes it). The "target" pose is the jar's body; the oracle treats
+# target.z + insert_z_offset (negative) as the release point inside the
+# cavity.
+objects:
+  plant:
+    role: pickable
+    type: cuboid
+    size: [0.02, 0.02, 0.20]
+    mass: 0.05
+    color: [0.35, 0.20, 0.08]
+    friction:
+      static: 2.0
+      dynamic: 1.8
+      restitution: 0.0
+    spawn:
+      x: [0.55, 0.65]
+      y: [0.15, 0.25]               # plant starts on the tray (matches
+                                    # pick_plant_out's tray spawn)
+      z: [0.10, 0.10]               # standing up on the tray
+      yaw: [-0.3, 0.3]
+  jar:
+    role: target
+    # Use a hollow cylindrical prop. Swap the usd_path to whatever jar
+    # asset you have available under ISAAC_NUCLEUS_DIR. If you don't have
+    # one, the closest approximation in the standard nucleus is a thin
+    # green block (Props/Blocks/green_block.usd) -- the policy will still
+    # learn the descent but the visual won't look like a jar.
+    type: usd
+    usd_path: Props/Blocks/green_block.usd     # TODO: replace with a jar/cup USD
+    scale: [3.0, 3.0, 6.0]                     # ~6cm radius, ~12cm tall
+    kinematic: true
+    spawn:
+      x: [0.42, 0.48]
+      y: [-0.04, 0.04]
+      z: [0.06, 0.06]               # jar centroid at z=0.06 -> top at z=0.12
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+cameras:
+  table_cam:
+    pos: [1.4, 0.0, 1.0]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true                     # wrist depth is critical for jar alignment
+
+# --- Success + grasp-check terms -------------------------------------------
+# Success here means the plant is INSIDE the jar (xy aligned, z below jar
+# top by at least the height_threshold) AND the gripper is open.
+#
+# We reuse object_on_target with a tight xy_threshold (jar opening is
+# narrow) and height_threshold interpreted as "how far below target.z the
+# plant must be to count as inserted".
+success:
+  type: object_on_target
+  object: plant
+  target: jar
+  xy_threshold: 0.025               # jar opening is small; insertion must
+                                    # be precise
+  height_threshold: 0.05
+grasp_check:
+  type: object_grasped
+  object: plant
+  diff_threshold: 0.06
+
+# --- Scripted oracle (state machine extended for insertion) ----------------
+# Knobs added by _runtime_jar:
+#   align_xy_tol      -- tighter xy tolerance for ALIGN phase (jar mouth)
+#   insert_z_offset   -- NEGATIVE: distance below target.z at release point
+#   retract_height    -- z to lift back up to after release (clear of jar)
+oracle:
+  hover_height: 0.20
+  grasp_z_offset: 0.06              # grasp 6cm above plant centroid (= same
+                                    # graspable point as in pick_plant_out)
+  lift_height: 0.32                 # well above jar top (z=0.12)
+  place_z_offset: 0.04              # not used by _runtime_jar but kept for
+                                    # default template compatibility
+  insert_z_offset: -0.04            # release 4cm BELOW jar top -> stem
+                                    # bottom rests inside jar
+  align_xy_tol: 0.008               # tight xy alignment before descending
+                                    # into the opening
+  retract_height: 0.32              # lift back up to clear of jar after
+                                    # release
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.020
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.008
+  grasp_hold_steps: 15
+  release_hold_steps: 8             # hold a bit longer; plant settles in
+                                    # the jar before retract
+  max_steps_per_episode: 500        # insertion takes longer than placement
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: put_plant_back_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the plant on the tray
+      next_description: Insert the plant into the jar
+    - object: jar
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Insert the plant into the jar
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/put_plant_back/demos.hdf5
+  annotated_path: data/annotated/put_plant_back/demos.hdf5
+  augmented_path: data/augmented/put_plant_back/demos.hdf5
+  hdf5_path: data/raw/put_plant_back/demos.hdf5
+
+training:
+  output_dir: checkpoints/put_plant_back
+
+eval:
+  checkpoint: checkpoints/put_plant_back/final

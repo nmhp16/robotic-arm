@@ -1,0 +1,163 @@
+# Pick the plant OUT of the jar and place it on the holding tray.
+#
+# Phase 1 of the two-phase plant-jar task. Uses the default _runtime
+# archetype (hover -> descend -> grasp -> lift -> move -> place -> release)
+# because extraction matches it cleanly: the plant centroid is below the
+# jar opening, but with grasp_z_offset>0 we grasp the stem at a height
+# that's already above the jar opening, so no orientation control is
+# needed during descent.
+#
+# To run:
+#   ./scripts/oracle.sh   --task pick_plant_out --num-demos 15
+#   ./scripts/annotate.sh --task pick_plant_out
+#   ./scripts/mimic.sh    --task pick_plant_out --num-demos 500
+#   ./scripts/train.sh    --task pick_plant_out
+#   ./scripts/eval.sh     --task pick_plant_out
+
+task:
+  name: pick_plant_out
+  instruction: pick the plant out of the jar and place it on the tray
+  gym_id: Isaac-PickPlantOut-UR5-IK-Rel-v0
+  mimic_gym_id: Isaac-PickPlantOut-UR5-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+robot:
+  type: ur5_simple_gripper
+  tcp_z_offset: 0.08
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.04
+  gripper_closed_threshold: 0.02
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# The plant is the pickable: a tall thin cylinder approximating a stem.
+# Standing vertical, the stem extends from z=0 to z=0.20 (centroid at 0.10).
+# We grasp it at the TOP (centroid + ~0.06m), well above the jar opening
+# (jar top is at z=0.12 in the put_plant_back task), so the gripper never
+# enters the jar cavity during extraction.
+#
+# The "target" is a flat tray pad placed off to the side of the jar.
+#
+# Note: the actual jar mesh is not spawned in this task. The plant's
+# initial pose is what would be inside the jar; the policy learns to lift
+# straight up first (LIFT phase reaches lift_height before MOVE) which
+# implicitly clears any jar that's there. If you later want a visible jar
+# obstacle in the scene, add it as a third object with a "fixture" role
+# and switch to the _runtime_jar template (see put_plant_back.yaml).
+objects:
+  plant:
+    role: pickable
+    type: cuboid                    # cylinder approximation; cuboid is the
+                                    # only primitive _runtime/env_cfg.py
+                                    # currently supports. Swap to a USD
+                                    # cylinder/stem asset when ready.
+    size: [0.02, 0.02, 0.20]        # 2cm x 2cm cross-section, 20cm tall
+    mass: 0.05
+    color: [0.35, 0.20, 0.08]       # brown stem
+    friction:
+      static: 2.0
+      dynamic: 1.8
+      restitution: 0.0
+    spawn:
+      x: [0.42, 0.48]               # near the jar's nominal position
+      y: [-0.04, 0.04]
+      z: [0.10, 0.10]               # centroid at 10cm (stem standing up)
+      yaw: [-0.3, 0.3]
+  tray:
+    role: target
+    type: usd
+    usd_path: Props/Blocks/green_block.usd
+    scale: [2.0, 2.0, 0.2]
+    kinematic: true
+    spawn:
+      x: [0.55, 0.65]
+      y: [0.15, 0.25]               # tray off to the +y side, away from jar
+      z: [0.0103, 0.0103]
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+cameras:
+  table_cam:
+    pos: [1.4, 0.0, 1.0]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+# success: plant is over the tray, gripper open. xy_threshold loose since
+# the tray is large; height_threshold tight (must be near the pad, not
+# 30cm above it).
+success:
+  type: object_on_target
+  object: plant
+  target: tray
+  xy_threshold: 0.06
+  height_threshold: 0.06
+grasp_check:
+  type: object_grasped
+  object: plant
+  diff_threshold: 0.06
+
+# --- Scripted oracle (state machine) ---------------------------------------
+# Heights tuned for a 20cm-tall stem with a 12cm-tall jar.
+oracle:
+  hover_height: 0.20            # 20cm above plant centroid -> tcp at z=0.30,
+                                # well above the jar (top z=0.12)
+  grasp_z_offset: 0.06          # grasp 6cm above plant centroid -> tcp at
+                                # z=0.16, above the jar opening
+  lift_height: 0.32             # high enough to clear a 12cm jar fully
+  place_z_offset: 0.025         # release just above the tray pad
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.020
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.008
+  grasp_hold_steps: 15
+  release_hold_steps: 5
+  max_steps_per_episode: 400
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: pick_plant_out_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the plant stem
+      next_description: Place the plant on the tray
+    - object: tray
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Place the plant on the tray
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/pick_plant_out/demos.hdf5
+  annotated_path: data/annotated/pick_plant_out/demos.hdf5
+  augmented_path: data/augmented/pick_plant_out/demos.hdf5
+  hdf5_path: data/raw/pick_plant_out/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_plant_out
+
+eval:
+  checkpoint: checkpoints/pick_plant_out/final
