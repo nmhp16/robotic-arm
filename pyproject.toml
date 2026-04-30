@@ -55,6 +55,15 @@ dev = [
     "ruff>=0.6",
 ]
 
+# CAD-to-URDF pipeline: split Epson STEP into per-link meshes, build
+# collision hulls, compute inertia. Used by scripts/split_t3_401_step.py.
+cad = [
+    "cadquery>=2.4",
+    "cadquery-ocp>=7.7",
+    "trimesh>=4.0",
+    "coacd>=1.0",
+]
+
 [project.urls]
 Repository = "https://github.com/nmhp16/robotic-arm"
 Issues = "https://github.com/nmhp16/robotic-arm/issues"
