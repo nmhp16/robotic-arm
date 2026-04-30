@@ -31,11 +31,16 @@ Thumbs.db
 
 /media/
 
-# Generated robot assets — only the *.urdf.xacro source is committed.
-# Regenerate via: xacro <name>.urdf.xacro -o <name>.urdf
-#                 ./scripts/convert_ur5_simple_gripper.py
+# Generated robot assets. The hand-written t3_401_simple_gripper.urdf is
+# the source-of-truth (no xacro indirection) and IS committed; everything
+# the URDF -> USD converter produces is regenerated locally.
 /assets/**/*.usd
 /assets/**/*.urdf
+!/assets/t3_401_simple_gripper/t3_401_simple_gripper.urdf
 /assets/**/configuration/
 /assets/**/config.yaml
 /assets/**/.asset_hash
+
+# Generated demo videos (large binaries; regenerate via oracle.sh /
+# smoke.sh with --video-out).
+/docs/videos/

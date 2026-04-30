@@ -1,11 +1,10 @@
-"""Convert assets/ur5_simple_gripper/ur5_simple_gripper.urdf to USD.
+"""Convert assets/t3_401_simple_gripper/t3_401_simple_gripper.urdf to USD.
 
-Two independent prismatic fingers — no mimic joints, no 4-bar linkage —
-so ``convert_mimic_joints_to_normal_joints`` is irrelevant. All joints
-are directly commandable.
+Two independent prismatic fingers, no mimic joints. All joints are directly
+commandable.
 
 Run with:
-    ~/IsaacLab/isaaclab.sh -p scripts/convert_ur5_simple_gripper.py
+    ~/IsaacLab/isaaclab.sh -p scripts/convert_t3_401_simple_gripper.py
 """
 
 from __future__ import annotations
@@ -23,9 +22,9 @@ from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E40
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-URDF_PATH = os.path.join(REPO_ROOT, "assets", "ur5_simple_gripper", "ur5_simple_gripper.urdf")
-USD_DIR = os.path.join(REPO_ROOT, "assets", "ur5_simple_gripper")
-USD_NAME = "ur5_simple_gripper.usd"
+URDF_PATH = os.path.join(REPO_ROOT, "assets", "t3_401_simple_gripper", "t3_401_simple_gripper.urdf")
+USD_DIR = os.path.join(REPO_ROOT, "assets", "t3_401_simple_gripper")
+USD_NAME = "t3_401_simple_gripper.usd"
 
 
 def main() -> None:

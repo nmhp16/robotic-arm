@@ -97,17 +97,28 @@ def _parse_args(default_dataset: str, default_max_steps: int) -> argparse.Namesp
     p.add_argument("--dataset-file", type=pathlib.Path, default=pathlib.Path(default_dataset))
     p.add_argument("--max-steps", type=int, default=default_max_steps)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--video-out", type=pathlib.Path, default=None,
+                   help="if set, write mp4(s) of each episode's table_cam + wrist_cam streams")
+    p.add_argument("--video-fps", type=int, default=15)
     return p.parse_args()
 
 
 def main(spec: dict[str, Any]) -> int:
     """Entry point invoked by ``arm_act.cli.oracle`` when the task spec
     sets ``template: _runtime_jar``."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    # AppLauncher's carb handler swallows our INFO logs. Force a stream
+    # handler on the root logger so phase progress reaches stderr.
+    root = logging.getLogger()
+    if not any(isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in root.handlers):
+        h = logging.StreamHandler(sys.stderr)
+        h.setLevel(logging.INFO)
+        h.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        root.addHandler(h)
+    root.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)
     params = _OracleParams.from_spec(spec)
     args = _parse_args(
         default_dataset=spec["data"]["raw_path"],
@@ -122,7 +133,8 @@ def main(spec: dict[str, Any]) -> int:
         from isaaclab.envs.mdp.recorders.recorders_cfg import ActionStateRecorderManagerCfg
         from isaaclab.managers.recorder_manager import DatasetExportMode
 
-        import arm_act.tasks  # noqa: F401  triggers task auto-registration
+        import arm_act.tasks
+        arm_act.tasks.register()
 
         gym_id = spec["task"]["gym_id"]
         env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
@@ -144,6 +156,10 @@ def main(spec: dict[str, Any]) -> int:
         exported = 0
         episode_idx = 0
         max_attempts = args.num_demos * params.max_attempts_per_demo
+
+        record_video = args.video_out is not None
+        video_table: list = []
+        video_wrist: list = []
 
         while exported < args.num_demos and episode_idx < max_attempts:
             episode_idx += 1
@@ -174,16 +190,14 @@ def main(spec: dict[str, Any]) -> int:
                 reached = _reached(tcp, wp_pos, phase, params)
                 action = _compute_action(tcp, wp_pos, gripper_open, params)
 
-                if phase is not prev_phase or step % 5 == 0:
-                    logger.info(
-                        "  ep%2d t%3d %-7s tcp=[%+.3f,%+.3f,%+.3f] "
-                        "obj=[%+.3f,%+.3f,%+.3f] tgt=[%+.3f,%+.3f,%+.3f] "
-                        "act_grip=%+.1f obs_grip=%.2f reached=%s",
-                        episode_idx, step, phase.name,
-                        tcp[0], tcp[1], tcp[2],
-                        pickable_now[0], pickable_now[1], pickable_now[2],
-                        target_now[0], target_now[1], target_now[2],
-                        action[6], gripper_rad, reached,
+                if phase is not prev_phase or step % 20 == 0:
+                    print(
+                        f"  ep{episode_idx:2d} t{step:3d} {phase.name:<7s} "
+                        f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
+                        f"obj=[{pickable_now[0]:+.3f},{pickable_now[1]:+.3f},{pickable_now[2]:+.3f}] "
+                        f"tgt=[{target_now[0]:+.3f},{target_now[1]:+.3f},{target_now[2]:+.3f}] "
+                        f"act_grip={action[-1]:+.1f} obs_grip={gripper_rad:.2f} reached={reached}",
+                        flush=True,
                     )
                 prev_phase = phase
 
@@ -202,6 +216,15 @@ def main(spec: dict[str, Any]) -> int:
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
 
+                if record_video:
+                    pol = obs.get("policy", {}) if isinstance(obs, dict) else {}
+                    t_cam = pol.get("table_cam")
+                    w_cam = pol.get("wrist_cam")
+                    if t_cam is not None:
+                        video_table.append(t_cam[0].cpu().numpy().astype("uint8").copy())
+                    if w_cam is not None:
+                        video_wrist.append(w_cam[0].cpu().numpy().astype("uint8").copy())
+
                 tm = env.termination_manager
                 if bool(tm.get_term("success")[0]):
                     env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
@@ -215,19 +238,21 @@ def main(spec: dict[str, Any]) -> int:
 
                 if bool(terminated[0]) or bool(truncated[0]):
                     flags = {name: bool(tm.get_term(name)[0]) for name in tm.active_terms}
-                    logger.info(
-                        "  ep%2d ENDED at t=%d phase=%s flags=%s",
-                        episode_idx, step, phase.name, flags,
-                    )
+                    print(f"  ep{episode_idx:2d} ENDED at t={step} phase={phase.name} flags={flags}", flush=True)
                     break
 
             tag = "SUCCESS" if succeeded else "FAIL"
-            logger.info(
-                "episode %3d: %-7s (%d/%d exported, final phase=%s)",
-                episode_idx, tag, exported, args.num_demos, phase.name,
+            print(
+                f"episode {episode_idx:3d}: {tag:<7s} ({exported}/{args.num_demos} exported, final phase={phase.name})",
+                flush=True,
             )
 
-        logger.info("wrote %d successful episodes to %s", exported, args.dataset_file)
+        print(f"wrote {exported} successful episodes to {args.dataset_file}", flush=True)
+
+        if record_video:
+            from arm_act.tasks._runtime.oracle import _save_oracle_videos
+            _save_oracle_videos(args.video_out, video_table, video_wrist, args.video_fps)
+
         try:
             env.close()
         except (RuntimeError, AttributeError, AssertionError):
@@ -309,7 +334,8 @@ def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams):
     dy = float(np.clip(wp_pos[1] - tcp[1], -p.max_dxy, p.max_dxy))
     dz = float(np.clip(wp_pos[2] - tcp[2], -p.max_dz, p.max_dz))
     gripper_cmd = 1.0 if gripper_open else -1.0
-    return np.array([dx, dy, dz, 0.0, 0.0, 0.0, gripper_cmd], dtype=np.float32)
+    # 4-DOF action: 3 position deltas + 1 gripper.
+    return np.array([dx, dy, dz, gripper_cmd], dtype=np.float32)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@
 # deep-merged onto these values at load time. CLI flags on train.sh /
 # eval.sh override individual fields without editing either YAML.
 #
-# Add a new task: copy src/arm_act/tasks/pick_place.yaml to
+# Add a new task: copy src/arm_act/tasks/pick_plant_out.yaml to
 # src/arm_act/tasks/<new_name>.yaml, edit it, and run
 # `./scripts/train.sh --task <new_name>`.
 

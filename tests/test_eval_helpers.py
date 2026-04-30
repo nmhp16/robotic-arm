@@ -11,7 +11,7 @@ def test_save_summary_writes_json(tmp_path) -> None:
     from arm_act.eval.common import save_summary
 
     path = tmp_path / "nested" / "summary.json"
-    data = {"task": "pick_place", "success_rate": 0.0, "episodes": [1, 2, 3]}
+    data = {"task": "pick_plant_out", "success_rate": 0.0, "episodes": [1, 2, 3]}
     save_summary(path, data)
 
     assert path.exists()

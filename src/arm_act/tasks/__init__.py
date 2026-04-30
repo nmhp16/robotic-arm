@@ -1,4 +1,4 @@
-"""Auto-register gym ids for every ``<name>.yaml`` directly under ``tasks/``.
+"""Lazy gym-id registration for every ``<name>.yaml`` directly under ``tasks/``.
 
 For each ``tasks/<name>.yaml`` we build three classes from the spec:
 
@@ -9,8 +9,8 @@ For each ``tasks/<name>.yaml`` we build three classes from the spec:
 Classes are stashed on this module so ``gym.register`` can resolve their
 ``module:Class`` entry-point strings (``arm_act.tasks:<ClassName>``).
 
-To add a new task variant: drop a ``tasks/<your_task>.yaml`` next to
-``pick_place.yaml`` — the next process import re-scans and registers it.
+To add a new task variant: drop a ``tasks/<your_task>.yaml`` next to the
+existing YAMLs — the next process import re-scans and registers it.
 No Python required for variants of an existing archetype.
 
 Multiple archetypes are supported via the optional ``template:`` key in
@@ -18,6 +18,12 @@ the task YAML. The default is ``_runtime``; sibling templates (e.g.,
 ``_runtime_jar``) live in their own subpackages alongside it and only
 need to expose ``build_env_cfg``, ``build_mimic_env``, and
 ``build_mimic_env_cfg`` (re-exported from ``_runtime`` if unchanged).
+
+Registration is deferred (``register()`` must be called explicitly).
+The builder pulls in ``isaaclab.sim`` which transitively requires the
+Omniverse ``pxr`` Python module; ``pxr`` is only available after Isaac
+Lab's ``AppLauncher`` has initialized Kit. CLI entry points and the
+runtime modules call ``register()`` after launching the app.
 """
 
 from __future__ import annotations
@@ -25,15 +31,13 @@ from __future__ import annotations
 import importlib
 from typing import Any, Callable
 
-import gymnasium as gym
-
-from arm_act.config import list_tasks, load
-
 DEFAULT_TEMPLATE = "_runtime"
+
+_registered = False
 
 
 def _class_prefix(task_name: str) -> str:
-    """`pick_place` -> `PickPlace`."""
+    """`pick_plant_out` -> `PickPlantOut`."""
     return "".join(part.capitalize() for part in task_name.split("_"))
 
 
@@ -60,7 +64,22 @@ def template_for(spec: dict[str, Any]) -> str:
     return str(spec.get("template", DEFAULT_TEMPLATE))
 
 
-def _register_all() -> None:
+def register(force: bool = False) -> None:
+    """Build env_cfg/mimic classes and call ``gym.register`` for every task.
+
+    Idempotent: subsequent calls are no-ops unless ``force=True``. Must be
+    invoked AFTER Isaac Lab's ``AppLauncher`` initializes (the env_cfg
+    builder imports ``isaaclab.sim``, which in turn imports the Omniverse
+    ``pxr`` python module).
+    """
+    global _registered
+    if _registered and not force:
+        return
+
+    import gymnasium as gym
+
+    from arm_act.config import list_tasks, load
+
     for task_name in list_tasks():
         spec = load(task_name)
         prefix = _class_prefix(task_name)
@@ -71,7 +90,6 @@ def _register_all() -> None:
         mimic_env_cls = build_mimic_env(spec, f"{prefix}MimicEnv")
         mimic_cfg_cls = build_mimic_env_cfg(env_cfg_cls, spec, f"{prefix}MimicEnvCfg")
 
-        # Stash the classes on this module so the gym entry-point strings resolve.
         globals()[env_cfg_cls.__name__] = env_cfg_cls
         globals()[mimic_env_cls.__name__] = mimic_env_cls
         globals()[mimic_cfg_cls.__name__] = mimic_cfg_cls
@@ -89,5 +107,4 @@ def _register_all() -> None:
             disable_env_checker=True,
         )
 
-
-_register_all()
+    _registered = True

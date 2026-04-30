@@ -5,16 +5,18 @@ from __future__ import annotations
 import textwrap
 
 
-def test_list_tasks_includes_pick_place() -> None:
+def test_list_tasks_includes_plant_tasks() -> None:
     from arm_act.config import list_tasks
 
-    assert "pick_place" in list_tasks()
+    tasks = list_tasks()
+    assert "pick_plant_out" in tasks
+    assert "put_plant_back" in tasks
 
 
 def test_load_default_task_returns_dict() -> None:
     from arm_act.config import load
 
-    cfg = load()  # default task = pick_place
+    cfg = load()  # default task = pick_plant_out
     assert isinstance(cfg, dict)
     for section in (
         "task", "robot", "objects", "cameras", "success", "grasp_check",
@@ -24,13 +26,14 @@ def test_load_default_task_returns_dict() -> None:
         assert section in cfg, f"missing section: {section}"
 
 
-def test_load_pick_place_overlays_task_fields() -> None:
+def test_load_pick_plant_out_overlays_task_fields() -> None:
     from arm_act.config import load
 
-    cfg = load("pick_place")
+    cfg = load("pick_plant_out")
     # Overlay (task.yaml) wins on these:
-    assert cfg["task"]["name"] == "pick_place"
-    assert cfg["task"]["gym_id"] == "Isaac-PickPlace-UR5-IK-Rel-v0"
+    assert cfg["task"]["name"] == "pick_plant_out"
+    assert cfg["task"]["gym_id"] == "Isaac-PickPlantOut-T3-IK-Rel-v0"
+    assert cfg["robot"]["type"] == "t3_401_simple_gripper"
     assert cfg["data"]["hdf5_path"]
     assert cfg["training"]["output_dir"]
     assert cfg["eval"]["checkpoint"]
@@ -62,9 +65,9 @@ def test_load_custom_defaults_path(tmp_path) -> None:
             """
         ).strip()
     )
-    cfg = load("pick_place", defaults_path=custom)
+    cfg = load("pick_plant_out", defaults_path=custom)
     assert cfg["policy"]["chunk_size"] == 7
     assert cfg["training"]["max_steps"] == 11
     # task.yaml overlay still applied on top:
-    assert cfg["task"]["name"] == "pick_place"
+    assert cfg["task"]["name"] == "pick_plant_out"
     assert cfg["training"]["output_dir"]

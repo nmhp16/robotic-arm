@@ -1,0 +1,294 @@
+<?xml version="1.0"?>
+<robot name="t3_401_simple_gripper">
+
+  <!-- Epson T3-401 SCARA + parallel-jaw gripper.
+       Geometry approximates the real arm with primitive shapes; the
+       headline dimensions match Epson's spec sheet:
+         arm 1 = 225mm, arm 2 = 175mm  (total reach 400mm)
+         J1 = +/-132 deg (+/-2.303 rad)
+         J2 = +/-141 deg (+/-2.461 rad)
+         J3 = 150mm prismatic stroke (positive = descend)
+         J4 = +/-360 deg (+/-6.283 rad)
+       The base column is taller than the real T3-401 (~500mm vs 370mm)
+       so that with J3=0 the tool reaches up to ~280mm above the table —
+       enough headroom to clear the jar during the lift+move phase.
+       The end-effector convention follows the UR5 description: a
+       `tool0_aligned` link whose +Z axis points along the tool approach
+       direction (downward in world space at home pose). -->
+
+  <link name="world"/>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.25" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.50" radius="0.05"/>
+      </geometry>
+      <material name="silver">
+        <color rgba="0.7 0.7 0.7 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.25" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.50" radius="0.05"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.25" rpy="0 0 0"/>
+      <mass value="6.0"/>
+      <inertia ixx="0.13" ixy="0" ixz="0" iyy="0.13" iyz="0" izz="0.0075"/>
+    </inertial>
+  </link>
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Joint 1: shoulder rotation about vertical at top of base column -->
+  <link name="link_1">
+    <visual>
+      <origin xyz="0.1125 0 0.020" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.225 0.06 0.040"/>
+      </geometry>
+      <material name="white">
+        <color rgba="0.95 0.95 0.95 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.1125 0 0.020" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.225 0.06 0.040"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.1125 0 0.020" rpy="0 0 0"/>
+      <mass value="2.0"/>
+      <inertia ixx="6.83e-4" ixy="0" ixz="0" iyy="8.7e-3" iyz="0" izz="8.85e-3"/>
+    </inertial>
+  </link>
+  <joint name="joint_1" type="revolute">
+    <parent link="base_link"/>
+    <child link="link_1"/>
+    <origin xyz="0 0 0.50" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.303" upper="2.303" effort="80.0" velocity="6.5"/>
+    <dynamics damping="2.0" friction="0.2"/>
+  </joint>
+
+  <!-- Joint 2: elbow rotation at end of arm 1 -->
+  <link name="link_2">
+    <visual>
+      <origin xyz="0.0875 0 0.020" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.175 0.05 0.040"/>
+      </geometry>
+      <material name="white"/>
+    </visual>
+    <collision>
+      <origin xyz="0.0875 0 0.020" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.175 0.05 0.040"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0.0875 0 0.020" rpy="0 0 0"/>
+      <mass value="1.5"/>
+      <inertia ixx="4.0e-4" ixy="0" ixz="0" iyy="4.03e-3" iyz="0" izz="4.03e-3"/>
+    </inertial>
+  </link>
+  <joint name="joint_2" type="revolute">
+    <parent link="link_1"/>
+    <child link="link_2"/>
+    <origin xyz="0.225 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.461" upper="2.461" effort="60.0" velocity="6.5"/>
+    <dynamics damping="2.0" friction="0.2"/>
+  </joint>
+
+  <!-- Joint 3: prismatic Z (positive = descend). Stroke is 200mm, slightly
+       longer than the real T3-401's 150mm spec; sim convenience so the
+       wrist can reach far enough below the arm body to insert into a jar
+       sitting on the table. The shaft visual hangs DOWN from the joint
+       origin, so as J3 increases the wrist (joint_4) descends. -->
+  <link name="link_3">
+    <visual>
+      <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.10" radius="0.012"/>
+      </geometry>
+      <material name="dark_grey">
+        <color rgba="0.2 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.10" radius="0.012"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+      <mass value="0.3"/>
+      <inertia ixx="2.6e-4" ixy="0" ixz="0" iyy="2.6e-4" iyz="0" izz="2.16e-5"/>
+    </inertial>
+  </link>
+  <joint name="joint_3" type="prismatic">
+    <parent link="link_2"/>
+    <child link="link_3"/>
+    <origin xyz="0.175 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 -1"/>
+    <limit lower="0.0" upper="0.200" effort="120.0" velocity="1.0"/>
+    <dynamics damping="3.0" friction="0.5"/>
+  </joint>
+
+  <!-- Joint 4: wrist rotation about vertical (yaw of the gripper).
+       Joint origin is at the bottom of the shaft visual. -->
+  <link name="link_4">
+    <visual>
+      <origin xyz="0 0 -0.02" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.04" radius="0.018"/>
+      </geometry>
+      <material name="dark_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 -0.02" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.04" radius="0.018"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 -0.02" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="2.16e-5" ixy="0" ixz="0" iyy="2.16e-5" iyz="0" izz="1.62e-5"/>
+    </inertial>
+  </link>
+  <joint name="joint_4" type="revolute">
+    <parent link="link_3"/>
+    <child link="link_4"/>
+    <origin xyz="0 0 -0.10" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-6.283" upper="6.283" effort="20.0" velocity="20.0"/>
+    <dynamics damping="0.5" friction="0.1"/>
+  </joint>
+
+  <!-- Tool flange located at the bottom of the wrist body. The fixed
+       transform rotates by 180 deg about X so tool0's +Z axis points
+       along the tool approach direction (downward in world at home
+       pose). This matches the UR5 description's `tool0_aligned`
+       convention so downstream code (env_cfg, oracle, ee_frame
+       transformer) does not need a SCARA-specific path. -->
+  <link name="tool0"/>
+  <joint name="link_4_to_tool0" type="fixed">
+    <parent link="link_4"/>
+    <child link="tool0"/>
+    <origin xyz="0 0 -0.04" rpy="3.14159265 0 0"/>
+  </joint>
+
+  <link name="tool0_aligned"/>
+  <joint name="tool0_to_aligned" type="fixed">
+    <parent link="tool0"/>
+    <child link="tool0_aligned"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Gripper base: short rigid block attached below tool0_aligned
+       (offset 4cm in approach direction so it sits clear of the wrist
+       cylinder). Houses the two prismatic fingers. -->
+  <link name="gripper_base">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.04 0.04"/>
+      </geometry>
+      <material name="gripper_base_grey">
+        <color rgba="0.2 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.04 0.04"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="0.1"/>
+      <inertia ixx="5e-5" ixy="0" ixz="0" iyy="8e-5" iyz="0" izz="8e-5"/>
+    </inertial>
+  </link>
+  <joint name="tool0_to_gripper_base" type="fixed">
+    <parent link="tool0_aligned"/>
+    <child link="gripper_base"/>
+    <origin xyz="0 0 0.04" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Left finger: prismatic, slides along gripper base's -Y.
+       Position 0.0 = fully open (finger at y=+0.04), 0.04 = closed. -->
+  <link name="finger_left">
+    <visual>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.01 0.06"/>
+      </geometry>
+      <material name="finger_grey">
+        <color rgba="0.15 0.15 0.15 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.01 0.06"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <mass value="0.02"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="2e-6"/>
+    </inertial>
+  </link>
+  <joint name="finger_left_joint" type="prismatic">
+    <parent link="gripper_base"/>
+    <child link="finger_left"/>
+    <origin xyz="0 0.04 0.02" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="0.0" upper="0.04" effort="50.0" velocity="0.2"/>
+    <dynamics damping="1.0" friction="0.1"/>
+  </joint>
+
+  <!-- Right finger: mirror of left. -->
+  <link name="finger_right">
+    <visual>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.01 0.06"/>
+      </geometry>
+      <material name="finger_grey">
+        <color rgba="0.15 0.15 0.15 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.01 0.06"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.03" rpy="0 0 0"/>
+      <mass value="0.02"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="2e-6"/>
+    </inertial>
+  </link>
+  <joint name="finger_right_joint" type="prismatic">
+    <parent link="gripper_base"/>
+    <child link="finger_right"/>
+    <origin xyz="0 -0.04 0.02" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.04" effort="50.0" velocity="0.2"/>
+    <dynamics damping="1.0" friction="0.1"/>
+  </joint>
+
+</robot>

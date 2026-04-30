@@ -37,11 +37,17 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _run(args: argparse.Namespace, spec: dict) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    root = logging.getLogger()
+    if not any(isinstance(h, logging.StreamHandler) and h.stream is sys.stderr for h in root.handlers):
+        h = logging.StreamHandler(sys.stderr)
+        h.setLevel(logging.INFO)
+        h.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        ))
+        root.addHandler(h)
+    root.setLevel(logging.INFO)
+    logger.setLevel(logging.INFO)
     app = AppLauncher(headless=not args.visible, enable_cameras=True)
     simulation_app = app.app
 
@@ -50,7 +56,8 @@ def _run(args: argparse.Namespace, spec: dict) -> int:
         import numpy as np
         import torch
 
-        import arm_act.tasks  # noqa: F401  triggers task auto-registration
+        import arm_act.tasks
+        arm_act.tasks.register()
 
         gym_id = spec["task"]["gym_id"]
         env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]

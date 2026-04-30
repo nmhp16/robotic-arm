@@ -16,9 +16,18 @@ from isaaclab.assets.articulation import ArticulationCfg
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
-def _ur5_simple_gripper() -> ArticulationCfg:
-    """UR5 arm + simple two-prismatic-finger parallel-jaw gripper."""
-    usd_path = os.path.join(_REPO_ROOT, "assets", "ur5_simple_gripper", "ur5_simple_gripper.usd")
+def _t3_401_simple_gripper() -> ArticulationCfg:
+    """Epson T3-401 SCARA arm + simple two-prismatic-finger parallel-jaw gripper.
+
+    Joint chain (matches assets/t3_401_simple_gripper/t3_401_simple_gripper.urdf):
+
+        joint_1   shoulder, revolute about world Z
+        joint_2   elbow, revolute about world Z
+        joint_3   prismatic Z (positive = descend)
+        joint_4   wrist yaw, revolute about world Z
+        finger_left_joint / finger_right_joint   independent prismatic fingers
+    """
+    usd_path = os.path.join(_REPO_ROOT, "assets", "t3_401_simple_gripper", "t3_401_simple_gripper.usd")
     return ArticulationCfg(
         spawn=sim_utils.UsdFileCfg(
             usd_path=usd_path,
@@ -34,13 +43,14 @@ def _ur5_simple_gripper() -> ArticulationCfg:
             activate_contact_sensors=False,
         ),
         init_state=ArticulationCfg.InitialStateCfg(
+            # Home pose: arm folded slightly, J3 retracted (shaft up), J4 zero.
+            # joint_1 = -pi/2 swings the arm to the +X direction so the
+            # workspace sits in front of the base in world coordinates.
             joint_pos={
-                "shoulder_pan_joint": 0.0,
-                "shoulder_lift_joint": -1.5707963267948966,
-                "elbow_joint": 1.5707963267948966,
-                "wrist_1_joint": 1.5707963267948966,
-                "wrist_2_joint": 0.0,
-                "wrist_3_joint": 0.0,
+                "joint_1": 0.0,
+                "joint_2": 0.0,
+                "joint_3": 0.0,
+                "joint_4": 0.0,
                 "finger_left_joint": 0.0,
                 "finger_right_joint": 0.0,
             },
@@ -48,24 +58,27 @@ def _ur5_simple_gripper() -> ArticulationCfg:
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         actuators={
-            "shoulder": ImplicitActuatorCfg(
-                joint_names_expr=["shoulder_.*"],
-                stiffness=1320.0,
-                damping=72.6636085,
+            # J1 + J2 are large rotary actuators driving the planar arm.
+            "shoulder_elbow": ImplicitActuatorCfg(
+                joint_names_expr=["joint_1", "joint_2"],
+                stiffness=1200.0,
+                damping=70.0,
                 friction=0.0,
                 armature=0.0,
             ),
-            "elbow": ImplicitActuatorCfg(
-                joint_names_expr=["elbow_joint"],
-                stiffness=600.0,
-                damping=34.64101615,
+            # J3 prismatic Z drive: stiff position control to hold against gravity.
+            "z_axis": ImplicitActuatorCfg(
+                joint_names_expr=["joint_3"],
+                stiffness=2000.0,
+                damping=80.0,
                 friction=0.0,
                 armature=0.0,
             ),
+            # J4 wrist: lighter rotary for yaw.
             "wrist": ImplicitActuatorCfg(
-                joint_names_expr=["wrist_.*"],
-                stiffness=216.0,
-                damping=29.39387691,
+                joint_names_expr=["joint_4"],
+                stiffness=200.0,
+                damping=20.0,
                 friction=0.0,
                 armature=0.0,
             ),
@@ -83,7 +96,7 @@ def _ur5_simple_gripper() -> ArticulationCfg:
 
 
 ROBOT_BUILDERS: dict[str, Callable[[], ArticulationCfg]] = {
-    "ur5_simple_gripper": _ur5_simple_gripper,
+    "t3_401_simple_gripper": _t3_401_simple_gripper,
 }
 
 

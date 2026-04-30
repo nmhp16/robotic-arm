@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Record keyboard demos for a task. All flags forwarded to arm_act.cli.teleop.
-#   ./scripts/teleop.sh                          # uses --task pick_place
-#   ./scripts/teleop.sh --task pick_place --num-demos 25
+#   ./scripts/teleop.sh                          # uses --task pick_plant_out
+#   ./scripts/teleop.sh --task pick_plant_out --num-demos 25
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"

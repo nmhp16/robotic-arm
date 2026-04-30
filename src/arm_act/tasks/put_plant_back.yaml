@@ -1,6 +1,6 @@
 # Put the plant BACK into the jar. Phase 2 of the two-phase task.
 #
-# Uses the new _runtime_jar template (sibling of _runtime) which extends
+# Uses the _runtime_jar template (sibling of _runtime) which extends
 # the standard archetype with an INSERT phase for descending below the
 # target's z (into the jar cavity) and a RETRACT phase that lifts the
 # gripper out of the jar before the episode ends. This is essential
@@ -29,12 +29,14 @@ template: _runtime_jar
 task:
   name: put_plant_back
   instruction: pick the plant from the tray and place it back inside the jar
-  gym_id: Isaac-PutPlantBack-UR5-IK-Rel-v0
-  mimic_gym_id: Isaac-PutPlantBack-UR5-IK-Rel-Mimic-v0
+  gym_id: Isaac-PutPlantBack-T3-IK-Rel-v0
+  mimic_gym_id: Isaac-PutPlantBack-T3-IK-Rel-Mimic-v0
 
 # --- Robot ------------------------------------------------------------------
 robot:
-  type: ur5_simple_gripper
+  type: t3_401_simple_gripper
+  arm_joints: [joint_1, joint_2, joint_3, joint_4]
+  ee_body: tool0_aligned
   tcp_z_offset: 0.08
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
@@ -49,11 +51,13 @@ robot:
 # brushes it). The "target" pose is the jar's body; the oracle treats
 # target.z + insert_z_offset (negative) as the release point inside the
 # cavity.
+#
+# Spawn ranges are constrained to T3-401's 400mm reach envelope.
 objects:
   plant:
     role: pickable
     type: cuboid
-    size: [0.02, 0.02, 0.20]
+    size: [0.02, 0.02, 0.15]
     mass: 0.05
     color: [0.35, 0.20, 0.08]
     friction:
@@ -61,10 +65,10 @@ objects:
       dynamic: 1.8
       restitution: 0.0
     spawn:
-      x: [0.55, 0.65]
-      y: [0.15, 0.25]               # plant starts on the tray (matches
+      x: [0.24, 0.28]
+      y: [0.16, 0.22]               # plant starts on the tray (matches
                                     # pick_plant_out's tray spawn)
-      z: [0.10, 0.10]               # standing up on the tray
+      z: [0.075, 0.075]             # standing up on the tray
       yaw: [-0.3, 0.3]
   jar:
     role: target
@@ -73,20 +77,26 @@ objects:
     # one, the closest approximation in the standard nucleus is a thin
     # green block (Props/Blocks/green_block.usd) -- the policy will still
     # learn the descent but the visual won't look like a jar.
+    # Without a hollow-jar USD, the bundled green_block stands in as a
+    # solid pedestal. The oracle places the plant on the pedestal's top
+    # surface rather than dropping it into a cavity; the state machine
+    # is otherwise identical to the insertion case (HOVER -> ... -> ALIGN
+    # -> INSERT -> RELEASE -> RETRACT). Swap in a hollow jar USD here
+    # and lower `insert_z_offset` to descend into the cavity.
     type: usd
-    usd_path: Props/Blocks/green_block.usd     # TODO: replace with a jar/cup USD
-    scale: [3.0, 3.0, 6.0]                     # ~6cm radius, ~12cm tall
+    usd_path: Props/Blocks/green_block.usd
+    scale: [3.0, 3.0, 4.0]                     # ~6cm wide, ~8cm tall pedestal
     kinematic: true
     spawn:
-      x: [0.42, 0.48]
+      x: [0.28, 0.32]
       y: [-0.04, 0.04]
-      z: [0.06, 0.06]               # jar centroid at z=0.06 -> top at z=0.12
+      z: [0.04, 0.04]               # pedestal centroid at z=0.04 -> top at z=0.08
       yaw: [0.0, 0.0]
 
 # --- Cameras ----------------------------------------------------------------
 cameras:
   table_cam:
-    pos: [1.4, 0.0, 1.0]
+    pos: [1.0, 0.0, 0.8]
     rot: [0.35355, -0.61237, -0.61237, 0.35355]
     focal_length: 18.0
     horizontal_aperture: 20.955
@@ -111,9 +121,11 @@ success:
   type: object_on_target
   object: plant
   target: jar
-  xy_threshold: 0.025               # jar opening is small; insertion must
-                                    # be precise
-  height_threshold: 0.05
+  xy_threshold: 0.04                # plant settles on top of the pedestal;
+                                    # tolerate ~4cm xy offset (pedestal is
+                                    # 6cm wide so plant base is contained)
+  height_threshold: 0.15            # plant centroid ~12cm above pedestal
+                                    # centroid when standing on top
 grasp_check:
   type: object_grasped
   object: plant
@@ -125,27 +137,36 @@ grasp_check:
 #   insert_z_offset   -- NEGATIVE: distance below target.z at release point
 #   retract_height    -- z to lift back up to after release (clear of jar)
 oracle:
-  hover_height: 0.20
+  hover_height: 0.20                # 20cm above plant centroid -> tcp at z=0.275
+                                    # (tray plant starts at z=0.075)
   grasp_z_offset: 0.06              # grasp 6cm above plant centroid (= same
                                     # graspable point as in pick_plant_out)
-  lift_height: 0.32                 # well above jar top (z=0.12)
+  lift_height: 0.26                 # matches pick_plant_out
   place_z_offset: 0.04              # not used by _runtime_jar but kept for
                                     # default template compatibility
-  insert_z_offset: -0.04            # release 4cm BELOW jar top -> stem
-                                    # bottom rests inside jar
-  align_xy_tol: 0.008               # tight xy alignment before descending
-                                    # into the opening
-  retract_height: 0.32              # lift back up to clear of jar after
+  insert_z_offset: 0.20             # tcp target = jar.z + 0.20 = 0.240;
+                                    # release the plant ~3cm above the
+                                    # pedestal top and let it drop. With
+                                    # the SCARA's pose-IK we get a clean
+                                    # 3cm descent from lift to release;
+                                    # deeper descents stall the DLS solver.
+  align_xy_tol: 0.015               # xy alignment before descending; loose
+                                    # enough to tolerate residual swing of
+                                    # the long plant in the gripper
+  retract_height: 0.26              # lift back up clear of pedestal after
                                     # release
-  max_dxy: 0.05
+  max_dxy: 0.05                     # matches pick_plant_out; the slower
+                                    # variant ran into IK descent stalls
   max_dz: 0.05
   xy_reach_tol: 0.020
   z_reach_tol: 0.015
-  z_reach_tol_tight: 0.008
+  z_reach_tol_tight: 0.015          # the SCARA's pose-IK descents stall
+                                    # near a few mm of the target; 0.008
+                                    # would reach indefinitely
   grasp_hold_steps: 15
-  release_hold_steps: 8             # hold a bit longer; plant settles in
-                                    # the jar before retract
-  max_steps_per_episode: 500        # insertion takes longer than placement
+  release_hold_steps: 8             # hold a bit longer; plant settles on
+                                    # the pedestal before retract
+  max_steps_per_episode: 600        # slower max_dxy => more steps per demo
   max_episode_attempts_per_demo: 5
 
 # --- Mimic augmentation ----------------------------------------------------

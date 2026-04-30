@@ -31,7 +31,7 @@ import yaml
 _HERE = pathlib.Path(__file__).resolve().parent
 DEFAULTS_PATH = _HERE / "training" / "defaults.yaml"
 TASKS_ROOT = _HERE / "tasks"
-DEFAULT_TASK = "pick_place"
+DEFAULT_TASK = "pick_plant_out"
 
 
 def load(task: str = DEFAULT_TASK, defaults_path: pathlib.Path | None = None) -> dict[str, Any]:

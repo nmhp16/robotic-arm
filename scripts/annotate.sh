@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Annotate raw demos with mimic's datagen_info so isaaclab_mimic can use them.
-#   ./scripts/annotate.sh                        # uses --task pick_place
-#   ./scripts/annotate.sh --task pick_place --input ... --output ...
+#   ./scripts/annotate.sh                        # uses --task pick_plant_out
+#   ./scripts/annotate.sh --task pick_plant_out --input ... --output ...
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/.." && pwd)"

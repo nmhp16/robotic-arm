@@ -19,7 +19,7 @@ through to the underlying module.
 ## Conventions
 
 Every script except `setup.sh` accepts `--task <name>` (default:
-`pick_place`). Other defaults come from:
+`pick_plant_out`). Other defaults come from:
 
 - `src/arm_act/training/defaults.yaml` — shared hyperparameters
 - `src/arm_act/tasks/<task>.yaml` — task-specific overrides
@@ -40,6 +40,6 @@ exact flag list.
 
 ## Helper scripts
 
-- `convert_ur5_simple_gripper.py` — one-shot URDF→USD converter for the
-  bundled robot. Run via `setup.sh` (idempotent); only needed manually
-  if you edit the URDF.
+- `convert_t3_401_simple_gripper.py` — one-shot URDF→USD converter for
+  the bundled Epson T3-401 SCARA + parallel-jaw gripper. Run via
+  `setup.sh` (idempotent); only needed manually if you edit the URDF.

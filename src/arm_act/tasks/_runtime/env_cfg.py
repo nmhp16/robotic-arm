@@ -73,6 +73,8 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     driver_joint = robot_cfg["gripper_driver_joint"]
     closed_threshold = float(robot_cfg["gripper_closed_threshold"])
     tcp_z = float(robot_cfg["tcp_z_offset"])
+    arm_joints: list[str] = list(robot_cfg["arm_joints"])
+    ee_body: str = str(robot_cfg.get("ee_body", "tool0_aligned"))
 
     # --- Robot + ee frame ---------------------------------------------------
     env_cfg.scene.robot = build_robot_cfg(robot_cfg["type"]).replace(prim_path="{ENV_REGEX_NS}/Robot")
@@ -86,7 +88,7 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         visualizer_cfg=marker_cfg,
         target_frames=[
             FrameTransformerCfg.FrameCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/tool0_aligned",
+                prim_path=f"{{ENV_REGEX_NS}}/Robot/{ee_body}",
                 name="end_effector",
                 offset=OffsetCfg(pos=[0.0, 0.0, tcp_z]),
             ),
@@ -103,7 +105,12 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         randomize_joint_state = EventTerm(
             func=events_mod.randomize_arm_joints_by_gaussian_offset,
             mode="reset",
-            params={"mean": 0.0, "std": float(robot_cfg["arm_joint_jitter_std"]), "asset_cfg": SceneEntityCfg("robot")},
+            params={
+                "mean": 0.0,
+                "std": float(robot_cfg["arm_joint_jitter_std"]),
+                "arm_joint_names": list(arm_joints),
+                "asset_cfg": SceneEntityCfg("robot"),
+            },
         )
         randomize_pickable = EventTerm(
             func=franka_stack_events.randomize_object_pose,
@@ -127,12 +134,22 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     env_cfg.events = _Events()
 
     # --- IK arm action + binary gripper action -----------------------------
+    # SCARA T3-401 has 4 DOF (J1+J2 planar, J3 prismatic Z, J4 yaw); roll
+    # and pitch are mechanically pinned to 0. A 6-DOF "pose" target is
+    # over-determined and DLS under-drives Z when it tries to balance
+    # unrealizable rotation residuals (we observed INSERT-phase descent
+    # locking after ~1mm). Position-only IK (3-DOF target) lets the
+    # solver focus on tracking xyz cleanly; J4 yaw is left at its home
+    # value, which is fine for tasks where post-grasp orientation
+    # doesn't matter. Set robot.ik_command_type: pose in task.yaml to
+    # restore the 6-DOF behavior.
+    ik_command_type = str(robot_cfg.get("ik_command_type", "position"))
     env_cfg.actions.arm_action = DifferentialInverseKinematicsActionCfg(
         asset_name="robot",
-        joint_names=["shoulder_.*", "elbow_joint", "wrist_.*"],
-        body_name="tool0_aligned",
+        joint_names=list(arm_joints),
+        body_name=ee_body,
         controller=DifferentialIKControllerCfg(
-            command_type="pose", use_relative_mode=True, ik_method="dls"
+            command_type=ik_command_type, use_relative_mode=True, ik_method="dls"
         ),
         scale=1.0,
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, tcp_z]),

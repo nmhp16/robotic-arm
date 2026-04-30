@@ -70,13 +70,15 @@ if [[ -z "${SKIP_USD:-}" ]]; then
     if [[ ! -x "$ISAACLAB/isaaclab.sh" ]]; then
         warn "skipping USD conversion (Isaac Lab not found)"
     else
-        # Run conversion only when the USD looks like a placeholder (<10 KB)
-        # or is missing. The URDF importer is heavy and we want this script
-        # to be idempotent.
-        variant=ur5_simple_gripper
+        # Idempotent URDF -> USD conversion. The USD is a thin layered file
+        # (~1-2 KB) that references configuration/*.usd; we treat the
+        # presence of the configuration directory as the "converted" marker
+        # rather than checking the top-level USD file size.
+        variant=t3_401_simple_gripper
         usd="$REPO_ROOT/assets/$variant/$variant.usd"
+        cfg_dir="$REPO_ROOT/assets/$variant/configuration"
         script="$REPO_ROOT/scripts/convert_$variant.py"
-        if [[ -f "$usd" ]] && [[ "$(stat -c %s "$usd" 2>/dev/null || echo 0)" -gt 10240 ]]; then
+        if [[ -f "$usd" ]] && [[ -d "$cfg_dir" ]]; then
             log "USD ok: $usd"
         else
             log "converting $variant URDF -> USD"
@@ -90,9 +92,9 @@ log ""
 log "task config lives at:    src/arm_act/tasks/<task>.yaml"
 log "shared hyperparams at:   src/arm_act/training/defaults.yaml"
 log ""
-log "next steps (default --task pick_place):"
-log "  ./scripts/teleop.sh --num-demos 15            # or ./scripts/oracle.sh"
-log "  ./scripts/annotate.sh                         # add datagen_info for mimic"
-log "  ./scripts/mimic.sh   --num-demos 500          # curobo augmentation"
-log "  ./scripts/train.sh                            # train ACT"
-log "  ./scripts/eval.sh                             # rollout eval"
+log "next steps (default --task pick_plant_out):"
+log "  ./scripts/oracle.sh   --num-demos 15           # collect oracle demos"
+log "  ./scripts/annotate.sh                          # add datagen_info for mimic"
+log "  ./scripts/mimic.sh    --num-demos 500          # curobo augmentation"
+log "  ./scripts/train.sh                             # train ACT"
+log "  ./scripts/eval.sh                              # rollout eval"

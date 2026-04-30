@@ -4,9 +4,9 @@ Reads ``defaults.yaml`` overlaid with ``tasks/<task>.yaml`` for the
 task's gym id and eval defaults. Runs N episodes, writes per-episode mp4 +
 ``summary.json`` to ``<eval.output_dir>/<timestamp>/``.
 
-    ./scripts/eval.sh                                              # uses --task pick_place
-    ./scripts/eval.sh --task pick_place --num-episodes 5
-    ./scripts/eval.sh --checkpoint checkpoints/pick_place/step_010000
+    ./scripts/eval.sh                                              # uses --task pick_plant_out
+    ./scripts/eval.sh --task pick_plant_out --num-episodes 5
+    ./scripts/eval.sh --checkpoint checkpoints/pick_plant_out/step_010000
 """
 
 from __future__ import annotations

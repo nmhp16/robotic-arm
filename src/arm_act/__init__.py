@@ -1,9 +1,9 @@
 """arm-act: Action Chunking Transformer imitation pipeline for Isaac Lab.
 
-UR5 + parallel-jaw, sim-only, one task per checkpoint. New tasks live as a
-single ``src/arm_act/tasks/<name>.yaml``; the runtime in
-``arm_act.tasks._runtime`` reads it and builds the env, oracle, and mimic
-config dynamically.
+Epson T3-401 SCARA + parallel-jaw, sim-only, one task per checkpoint.
+New tasks live as a single ``src/arm_act/tasks/<name>.yaml``; the runtime
+in ``arm_act.tasks._runtime`` reads it and builds the env, oracle, and
+mimic config dynamically.
 
 Public entry points:
 

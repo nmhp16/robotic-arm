@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Train ACT for a task. Reads defaults.yaml + tasks/<task>.yaml.
 # Runs in the local training venv (not Isaac Lab's python).
-#   ./scripts/train.sh                          # uses --task pick_place
-#   ./scripts/train.sh --task pick_place --max-steps 1000
+#   ./scripts/train.sh                          # uses --task pick_plant_out
+#   ./scripts/train.sh --task pick_plant_out --max-steps 1000
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

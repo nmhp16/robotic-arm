@@ -5,9 +5,9 @@ Reads ``src/arm_act/training/defaults.yaml`` and overlays
 defined in ``act_policy.py`` with L1 loss; saves the policy + norm stats
 to ``training.output_dir`` every ``training.save_every`` steps.
 
-    ./scripts/train.sh                          # uses --task pick_place by default
-    ./scripts/train.sh --task pick_place        # explicit task
-    ./scripts/train.sh --max-steps 1000         # ad-hoc CLI override
+    ./scripts/train.sh                              # uses --task pick_plant_out by default
+    ./scripts/train.sh --task pick_plant_out        # explicit task
+    ./scripts/train.sh --max-steps 1000             # ad-hoc CLI override
 """
 
 from __future__ import annotations
