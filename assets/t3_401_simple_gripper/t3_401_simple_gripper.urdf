@@ -20,13 +20,26 @@
 
   <link name="base_link">
     <visual>
-      <origin xyz="0 0 0.25" rpy="0 0 0"/>
+      <!-- CAD mesh: assembly is Y-up, arm extends in -X. rpy=(pi/2, 0, pi)
+           remaps Y_cad -> Z_urdf and flips X. The CAD column is 437 mm tall
+           but joint_1 sits at z=0.50 per the original spec, so a primitive
+           filler caps the column up to the joint plane (see second visual). -->
+      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
       <geometry>
-        <cylinder length="0.50" radius="0.05"/>
+        <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="silver">
         <color rgba="0.7 0.7 0.7 1.0"/>
       </material>
+    </visual>
+    <visual>
+      <!-- Filler hub: bridges the 63 mm gap between the CAD column top
+           (z=0.437) and the kinematic joint_1 plane (z=0.500). -->
+      <origin xyz="0 0 0.4685" rpy="0 0 0"/>
+      <geometry>
+        <cylinder length="0.063" radius="0.05"/>
+      </geometry>
+      <material name="silver"/>
     </visual>
     <collision>
       <origin xyz="0 0 0.25" rpy="0 0 0"/>
@@ -49,9 +62,13 @@
   <!-- Joint 1: shoulder rotation about vertical at top of base column -->
   <link name="link_1">
     <visual>
-      <origin xyz="0.1125 0 0.020" rpy="0 0 0"/>
+      <!-- joint_1 axis sits at CAD (0, 0.18, 0). After rpy=(pi/2,0,pi)
+           rotation that maps to URDF (0, 0, 0.18); translate by -0.18 in z
+           to land it at the link origin. Arm body then extends +X as URDF
+           expects. Collision keeps the primitive box for PhysX stability. -->
+      <origin xyz="0 0 -0.18" rpy="1.5707963 0 3.1415927"/>
       <geometry>
-        <box size="0.225 0.06 0.040"/>
+        <mesh filename="meshes/link_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="white">
         <color rgba="0.95 0.95 0.95 1.0"/>
@@ -81,9 +98,14 @@
   <!-- Joint 2: elbow rotation at end of arm 1 -->
   <link name="link_2">
     <visual>
-      <origin xyz="0.0875 0 0.020" rpy="0 0 0"/>
+      <!-- joint_2 axis at CAD (-0.225, 0.20, 0); maps to URDF (0.225, 0, 0.20)
+           after rpy=(pi/2,0,pi); translate by (-0.225, 0, -0.20) to bring it
+           to the link origin. The A2 housing extends ~23 cm above joint_2
+           which gives the elbow servo + Z-motor housing the right vertical
+           silhouette. -->
+      <origin xyz="-0.225 0 -0.20" rpy="1.5707963 0 3.1415927"/>
       <geometry>
-        <box size="0.175 0.05 0.040"/>
+        <mesh filename="meshes/link_2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="white"/>
     </visual>
@@ -115,9 +137,14 @@
        origin, so as J3 increases the wrist (joint_4) descends. -->
   <link name="link_3">
     <visual>
-      <origin xyz="0 0 -0.05" rpy="0 0 0"/>
+      <!-- The shaft mesh has been trimmed to its bottom 100 mm (CAD y=0.16
+           to 0.26) by convert_step_to_meshes.py so it matches the URDF's
+           joint_3 -> joint_4 spacing. Top of trimmed mesh is CAD y=0.26;
+           rpy=(pi/2,0,pi) plus xyz=(-0.40, 0, -0.26) puts that at the link
+           origin, with the bottom at z=-0.10 where joint_4 attaches. -->
+      <origin xyz="-0.40 0 -0.26" rpy="1.5707963 0 3.1415927"/>
       <geometry>
-        <cylinder length="0.10" radius="0.012"/>
+        <mesh filename="meshes/link_3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="dark_grey">
         <color rgba="0.2 0.2 0.2 1.0"/>

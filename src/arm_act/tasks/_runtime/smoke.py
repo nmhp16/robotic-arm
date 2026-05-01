@@ -79,6 +79,15 @@ def _run(args: argparse.Namespace, spec: dict) -> int:
 
             device = env.unwrapped.device
             rng = np.random.default_rng(0)
+            action_dim = int(env.unwrapped.action_manager.total_action_dim)
+            # Walk the EE around home with a small, smooth, drift-bounded
+            # signal. Pure-random deltas of 2 cm/tick drive the SCARA into
+            # joint-3 limits and J1/J2 singularities; that looks like shake
+            # in the video but tells you nothing about the robot. A 5 mm
+            # bounded random walk stays inside the reach envelope.
+            walk_scale = 0.005      # 5 mm per axis per step
+            walk_clip = 0.04        # clamp cumulative drift to +/- 4 cm
+            walk_state = np.zeros(action_dim, dtype="float32")
 
             record_video = args.video_out is not None
             table_frames: list = []
@@ -86,13 +95,14 @@ def _run(args: argparse.Namespace, spec: dict) -> int:
 
             for _ in range(args.steps):
                 if args.random:
-                    a = rng.uniform(-1.0, 1.0, size=7).astype("float32")
-                    a[:3] *= 0.02
-                    a[3:6] *= 0.05
-                    a[6] = 0.0
+                    walk_state += rng.uniform(-1.0, 1.0, size=action_dim).astype("float32") * walk_scale
+                    np.clip(walk_state, -walk_clip, walk_clip, out=walk_state)
+                    a = walk_state.copy()
+                    if action_dim > 0:
+                        a[-1] = 0.0  # gripper stays at neutral
                     action = torch.from_numpy(a).to(device).unsqueeze(0)
                 else:
-                    action = torch.zeros((1, 7), device=device)
+                    action = torch.zeros((1, action_dim), device=device)
                 obs, *_ = env.step(action)
 
                 if record_video:
