@@ -55,6 +55,18 @@ class _OracleParams:
     release_hold_steps: int
     max_steps_per_episode: int
     max_attempts_per_demo: int
+    # If True, the episode ends as soon as LIFT reaches lift_height — skips
+    # MOVE/PLACE/RELEASE entirely. Use for "pick and lift up" tasks where
+    # there is no placement target, just a graspable object that needs to
+    # be removed from its starting pose.
+    terminate_after_lift: bool
+    # Mirrors robot.ik_command_type in task.yaml. "position" => 4-DOF action
+    # (3 translation deltas + gripper). "pose" => 7-DOF action (3 translation
+    # + 3 axis-angle rotation deltas + gripper); rotation deltas are zero
+    # since the SCARA can't pitch/roll. Pose mode is required when the env
+    # is annotated through Isaac Lab's mimic stack, which subclasses the
+    # 7-D Franka IK env.
+    ik_command_type: str
 
     @classmethod
     def from_spec(cls, spec: dict[str, Any]) -> _OracleParams:
@@ -63,16 +75,18 @@ class _OracleParams:
             hover_height=float(o["hover_height"]),
             grasp_z_offset=float(o["grasp_z_offset"]),
             lift_height=float(o["lift_height"]),
-            place_z_offset=float(o["place_z_offset"]),
+            place_z_offset=float(o.get("place_z_offset", 0.0)),
             max_dxy=float(o["max_dxy"]),
             max_dz=float(o["max_dz"]),
             xy_reach_tol=float(o["xy_reach_tol"]),
             z_reach_tol=float(o["z_reach_tol"]),
             z_reach_tol_tight=float(o["z_reach_tol_tight"]),
             grasp_hold_steps=int(o["grasp_hold_steps"]),
-            release_hold_steps=int(o["release_hold_steps"]),
+            release_hold_steps=int(o.get("release_hold_steps", 0)),
             max_steps_per_episode=int(o["max_steps_per_episode"]),
             max_attempts_per_demo=int(o["max_episode_attempts_per_demo"]),
+            terminate_after_lift=bool(o.get("terminate_after_lift", False)),
+            ik_command_type=str(spec.get("robot", {}).get("ik_command_type", "position")),
         )
 
 
@@ -195,6 +209,24 @@ def main(spec: dict[str, Any]) -> int:
                         phase = Phase.LIFT
                         hold_counter = 0
                 elif reached:
+                    # Pick-and-lift-only mode: declare success on LIFT
+                    # completion; never advance to MOVE.
+                    if params.terminate_after_lift and phase is Phase.LIFT:
+                        print(
+                            f"  ep{episode_idx:2d} t{step:3d} LIFT-DONE "
+                            f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
+                            f"obj=[{pickable_now[0]:+.3f},{pickable_now[1]:+.3f},{pickable_now[2]:+.3f}] "
+                            f"-> early success",
+                            flush=True,
+                        )
+                        env.recorder_manager.record_pre_reset([0], force_export_or_skip=False)
+                        env.recorder_manager.set_success_to_episodes(
+                            [0], torch.tensor([[True]], dtype=torch.bool, device=env.device)
+                        )
+                        env.recorder_manager.export_episodes([0])
+                        succeeded = True
+                        exported += 1
+                        break
                     phase = _next_phase(phase)
                     hold_counter = 0
 
@@ -334,9 +366,106 @@ def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams):
     dz = float(np.clip(wp_pos[2] - tcp[2], -p.max_dz, p.max_dz))
     # Isaac Lab BinaryJointAction: positive = OPEN, negative = CLOSE.
     gripper_cmd = 1.0 if gripper_open else -1.0
-    # 4-DOF action layout: 3 position deltas (matches IK
-    # command_type="position") + 1 gripper.
+    if p.ik_command_type == "pose":
+        # 7-DOF: 3 translation deltas + 3 axis-angle rotation deltas + gripper.
+        # Rotation deltas are zero — SCARA can't pitch/roll, and we keep yaw
+        # at home. Required for mimic-env compatibility (it subclasses the
+        # 7-D Franka IK env that slices action[:, 3:6] for delta_rotation).
+        return np.array([dx, dy, dz, 0.0, 0.0, 0.0, gripper_cmd], dtype=np.float32)
     return np.array([dx, dy, dz, gripper_cmd], dtype=np.float32)
+
+
+def oracle_action_at_state(
+    *,
+    tcp: "np.ndarray",
+    pickable_pos: "np.ndarray",
+    target_pos: "np.ndarray",
+    gripper_drive_pos: float,
+    gripper_closed_threshold: float,
+    params: _OracleParams,
+) -> "np.ndarray":
+    """Stateless oracle: return the action the scripted policy would emit for
+    the given env snapshot.
+
+    The original ``main()`` loop tracks an explicit ``Phase`` plus several
+    counters (``hold_counter``, ``grasp_pickable_pos``, ``lift_xy_ref``).
+    For DAgger we need to query the oracle from arbitrary policy-visited
+    states, so we re-derive "what to do next" from observable signals only:
+
+      1. Is the gripper currently closed (driver joint > closed threshold)?
+      2. Is the pickable lifted off the table (z above a small clearance)?
+      3. Is the TCP above the pickable / above the target?
+      4. Has the TCP descended to grasp / place height?
+
+    No hidden counters means we can't reproduce the original "hold for N
+    steps after closing the jaws" behavior, but with a stiff gripper the
+    finger reaches its commanded position in ~5 steps and the closed-loop
+    policy will keep sending the close command on its own.
+
+    Returns: 4-D ``[dx, dy, dz, gripper]`` for ``ik_command_type=position``,
+    7-D ``[dx, dy, dz, drx, dry, drz, gripper]`` for ``ik_command_type=pose``.
+    Position deltas are clipped to ``params.max_dxy`` / ``params.max_dz``
+    so a single oracle call can't command an over-aggressive jump.
+    """
+    import numpy as np
+
+    p = params
+    gripper_is_closed = gripper_drive_pos > gripper_closed_threshold
+
+    # Heuristic: pickable is "lifted" when its centroid is appreciably above
+    # the table. The cuboid is 0.15 m tall with centroid at z=0.075 when
+    # resting on the table; we consider z > 0.10 as "in the air".
+    plant_lifted = pickable_pos[2] > 0.10
+
+    # xy alignment checks reuse the same tolerances as ``_reached``.
+    def _xy_close(a, b):
+        return float(np.linalg.norm(np.asarray(a)[:2] - np.asarray(b)[:2])) < p.xy_reach_tol
+
+    # Detect "gripper closed but holding nothing": the policy may have
+    # squeezed the jaws on empty air, then the cuboid stayed on the table.
+    # Treat this as "open the gripper and try the pick again" rather than
+    # advancing into LIFT/MOVE on a phantom payload.
+    if gripper_is_closed:
+        import numpy as _np
+        ee_to_plant = float(_np.linalg.norm(_np.asarray(tcp) - _np.asarray(pickable_pos)))
+        if ee_to_plant > 0.10:
+            # Reopen and head back above the plant.
+            wp = _xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.hover_height)
+            return _compute_action(tcp, wp, gripper_open=True, p=p)
+
+    if not gripper_is_closed:
+        # ---- Pre-grasp branch: HOVER → DESCEND → close gripper -----------
+        if not _xy_close(tcp, pickable_pos):
+            wp = _xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.hover_height)
+            return _compute_action(tcp, wp, gripper_open=True, p=p)
+
+        descend_z = pickable_pos[2] + p.grasp_z_offset
+        if tcp[2] > descend_z + p.z_reach_tol_tight:
+            wp = _xyz(pickable_pos[0], pickable_pos[1], descend_z)
+            return _compute_action(tcp, wp, gripper_open=True, p=p)
+
+        # In place to grasp: hold position, command close.
+        wp = _xyz(pickable_pos[0], pickable_pos[1], descend_z)
+        return _compute_action(tcp, wp, gripper_open=False, p=p)
+
+    # ---- Post-grasp branch: LIFT → MOVE → PLACE → RELEASE ---------------
+    if not plant_lifted:
+        # Gripper just closed; rise straight up before moving laterally.
+        wp = _xyz(tcp[0], tcp[1], p.lift_height)
+        return _compute_action(tcp, wp, gripper_open=False, p=p)
+
+    if not _xy_close(tcp, target_pos):
+        wp = _xyz(target_pos[0], target_pos[1], p.lift_height)
+        return _compute_action(tcp, wp, gripper_open=False, p=p)
+
+    place_z = target_pos[2] + p.place_z_offset
+    if tcp[2] > place_z + p.z_reach_tol_tight:
+        wp = _xyz(target_pos[0], target_pos[1], place_z)
+        return _compute_action(tcp, wp, gripper_open=False, p=p)
+
+    # In place to release: hold position, command open.
+    wp = _xyz(target_pos[0], target_pos[1], place_z)
+    return _compute_action(tcp, wp, gripper_open=True, p=p)
 
 
 if __name__ == "__main__":

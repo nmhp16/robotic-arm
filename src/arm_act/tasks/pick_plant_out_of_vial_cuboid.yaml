@@ -1,0 +1,200 @@
+# Pick a stem (cuboid stand-in) OUT of the vial — pipeline-validation
+# variant of pick_plant_out_of_vial. The leaf-plant USD's grip is too
+# brittle for reliable oracle demos, so this version uses a 2x2x15 cm
+# cuboid the tweezer can grip cleanly. Same vial scene, same tweezer,
+# same pick-and-lift state machine. Once the full ACT pipeline is
+# validated end-to-end here, swap the plant back to the leaf_plant USD
+# (with proper convex-decomp collision) and retrain.
+#
+# To run:
+#   ./scripts/oracle.sh   --task pick_plant_out_of_vial_cuboid --num-demos 15
+#   ./scripts/annotate.sh --task pick_plant_out_of_vial_cuboid
+#   ./scripts/mimic.sh    --task pick_plant_out_of_vial_cuboid --num-demos 500
+#   ./scripts/train.sh    --task pick_plant_out_of_vial_cuboid
+#   ./scripts/eval.sh     --task pick_plant_out_of_vial_cuboid
+
+task:
+  name: pick_plant_out_of_vial_cuboid
+  instruction: pick the stem out of the vial and lift it up
+  gym_id: Isaac-PickPlantOutOfVialCuboid-T3-IK-Rel-v0
+  mimic_gym_id: Isaac-PickPlantOutOfVialCuboid-T3-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+# Use the simple paddle gripper for this pipeline-validation variant —
+# the tweezer physics is too brittle for reliable demos. Once the full
+# oracle->mimic->train->eval loop is proven here, switch back to
+# t3_401_tweezer for the realistic version of the task.
+robot:
+  type: t3_401_simple_gripper
+  arm_joints: [joint_1, joint_2, joint_3, joint_4]
+  ee_body: tool0_aligned
+  tcp_z_offset: 0.08
+  arm_joint_jitter_std: 0.02
+  ik_command_type: pose                       # 6-DOF action (3 trans + 3 rot) so the
+                                              # mimic env (which subclasses Franka 7-D)
+                                              # can reuse target_eef_pose math
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.04
+  # Threshold below which the gripper counts as "open" and above which it
+  # counts as "closed" for the grasp/place subtask checks. The cuboid is
+  # 2 cm wide so each finger physically halts at ~0.02 m of inward travel
+  # — recorded peak joint pos is only 0.022 m (cuboid blocks the close
+  # command from reaching the 0.04 m target). Setting the threshold to
+  # 0.02 leaves only ~2 mm of margin, and tiny physics non-determinism
+  # during the mimic-annotate replay knocks the joint just below it,
+  # silently failing the grasp signal on every episode. 0.01 m gives
+  # ~12 mm of margin and still cleanly separates "open" (joint at 0) from
+  # "closed around the cuboid" (joint at ~0.022).
+  gripper_closed_threshold: 0.01
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# vial: kinematic, sits on the table, collision disabled (cosmetic only).
+# plant: thin upright cuboid stand-in for a stem. 2 cm cross-section gives
+#   the tweezer flat parallel surfaces to grip — friction-stable pinch.
+# tray: tiny vestigial pad off-screen (target role required by env builder
+#   but unused — terminate_after_lift ends the demo after LIFT).
+objects:
+  # Vial commented out for pipeline-validation — restore once we confirm
+  # the full oracle->train->eval loop works without it.
+  # vial:
+  #   role: distractor
+  #   type: usd
+  #   usd_path: local:assets/wide_vial/wide_vial.usd
+  #   scale: [1.0, 1.0, 1.0]
+  #   kinematic: true
+  #   collision: false
+  #   spawn: {x: [0.30, 0.32], y: [-0.02, 0.00], z: [0.035, 0.035], yaw: [0.0, 0.0]}
+  plant:
+    role: pickable
+    type: cuboid
+    size: [0.02, 0.02, 0.15]                  # 2 cm cross-section (fits in simple
+                                              # gripper's 4 cm open gap), 15 cm tall
+    mass: 0.05
+    color: [0.30, 0.55, 0.20]
+    friction:
+      static: 2.0
+      dynamic: 1.8
+      restitution: 0.0
+    spawn:
+      # Was [0.30, 0.32] × [-0.02, 0.00] — 2×2 cm region. Widened to 12×12 cm
+      # so the policy can't get away with outputting the dataset-mean action;
+      # it has to read the wrist/table cameras to know where the cuboid is.
+      # Without this the trained policy mode-collapses (drifts off in some
+      # constant direction regardless of state) because "the mean" is a
+      # locally optimal MSE solution when all demos start from nearly the
+      # same pose. Stays well within the SCARA's reachable workspace.
+      x: [0.24, 0.36]
+      y: [-0.06, 0.06]
+      z: [0.075, 0.075]                       # centroid -> base z=0, top z=0.15
+      yaw: [-0.2, 0.2]
+  tray:
+    # Same setup as the working pick_plant_out task: green_block USD,
+    # scaled flat. The tray is the success target.
+    role: target
+    type: usd
+    usd_path: Props/Blocks/green_block.usd
+    scale: [2.0, 2.0, 0.2]
+    kinematic: true
+    spawn:
+      # Widened from 4×6 cm to 12×12 cm for the same camera-conditioning
+      # reason — the model needs to see the tray to plan the place phase.
+      x: [0.20, 0.32]
+      y: [0.13, 0.25]
+      z: [0.0103, 0.0103]
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+cameras:
+  table_cam:
+    pos: [1.0, 0.0, 0.8]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+success:
+  type: object_on_target
+  object: plant
+  target: tray
+  xy_threshold: 0.05
+  height_threshold: 0.10
+grasp_check:
+  type: object_grasped
+  object: plant
+  # The simple_gripper's ee_frame (tool0_aligned + tcp_z=0.08) sits at the
+  # paddle base, ~5.7 cm above the cuboid centroid when the gripper has
+  # closed around the stem. Recorded grasp-frame distance is ~0.058 m, so
+  # the original 0.04 threshold rejected every demo's grasp signal during
+  # the mimic-annotate replay. 0.08 m comfortably accepts a successful
+  # grasp without triggering false positives during HOVER (~0.20 m away).
+  diff_threshold: 0.08
+
+# --- Scripted oracle (state machine) ---------------------------------------
+# FULL pick-and-place: HOVER -> DESCEND -> GRASP -> LIFT -> MOVE -> PLACE
+# -> RELEASE. Demos show the complete sequence; ACT learns to do the
+# same. terminate_after_lift would cut demos short before the plant
+# physically follows the gripper, producing useless training data.
+oracle:
+  # Copied verbatim from src/arm_act/tasks/pick_plant_out.yaml — that task
+  # uses the same plant + simple_gripper combo and is proven to succeed
+  # consistently. Parameters are tuned for this geometry; deviating
+  # caused the gripper to slip the plant during LIFT/MOVE.
+  hover_height: 0.15
+  grasp_z_offset: 0.06
+  lift_height: 0.29       # was 0.26; +3 cm so plant centroid clears
+                          # any rim/fixture during the lateral MOVE phase
+  place_z_offset: 0.145
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.020
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.008
+  grasp_hold_steps: 15
+  release_hold_steps: 5
+  max_steps_per_episode: 400
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: pick_plant_out_of_vial_cuboid_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.005
+      num_interpolation_steps: 5
+      description: Grasp the stem in the vial
+      next_description: Place the stem on the tray
+    - object: tray
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.005
+      num_interpolation_steps: 5
+      description: Place the stem on the tray
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/pick_plant_out_of_vial_cuboid/demos.hdf5
+  annotated_path: data/annotated/pick_plant_out_of_vial_cuboid/demos.hdf5
+  augmented_path: data/augmented/pick_plant_out_of_vial_cuboid/demos.hdf5
+  hdf5_path: data/augmented/pick_plant_out_of_vial_cuboid/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_plant_out_of_vial_cuboid
+
+eval:
+  checkpoint: checkpoints/pick_plant_out_of_vial_cuboid/final

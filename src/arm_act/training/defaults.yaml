@@ -17,7 +17,12 @@ data:
 
 # --- Policy (ACT model) ------------------------------------------------------
 policy:
-  chunk_size: 50              # actions per forward pass (also the open-loop replay length at eval)
+  chunk_size: 10              # was 50 — shrunk so the decoder can't memorize whole-demo
+                              # templates from t=0 state alone. With 50-step demos, chunk_size=50
+                              # means the first state predicts the entire trajectory; the model
+                              # short-circuits state-conditioning and collapses to dataset-mean
+                              # output. chunk=10 forces re-planning ~5× per demo and pulls
+                              # success-relevant frames into more training windows.
   hidden_dim: 256
   n_heads: 8
   n_encoder_layers: 4
@@ -53,5 +58,7 @@ collect:
 
 # --- Mimic augmentation -----------------------------------------------------
 mimic:
-  num_demos: 500
+  num_demos: 1000     # was 500 — bumped to give the policy more diversity
+                      # to learn from. Combined with widened spawn ranges,
+                      # this is the standard fix for ACT mode-collapse.
   num_envs: 4

@@ -80,7 +80,11 @@ def main() -> int:
 
         from arm_act.training.act_policy import load_policy
 
-        importlib.import_module("arm_act.tasks")  # triggers task auto-registration
+        # Task gym registration is gated behind an explicit register() call so
+        # it can be deferred until after AppLauncher init (env_cfg builders
+        # need pxr from Omniverse). Importing the module alone is a no-op.
+        import arm_act.tasks
+        arm_act.tasks.register()
 
         policy = load_policy(checkpoint, device="cuda")
         if action_horizon_override is not None:
@@ -135,6 +139,27 @@ def main() -> int:
                 action = policy.select_action(cam_imgs, state)  # (action_dim,)
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
+
+                # TEMP eval-trace: sample env state at intervals so we can see
+                # where the policy gets stuck. Remove once we have 1+ success.
+                import os as _os
+                if _os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0 and t in (0, 50, 100, 150, 200, 250, 299):
+                    try:
+                        _pl = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
+                        _tg = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
+                        _tc = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
+                        _gp = float(grip[0])
+                        _atch = bool(getattr(env.unwrapped, "_kinematic_attach_active", torch.zeros(1))[0])
+                        print(
+                            f"[TRACE] ep0 t={t} act={action.tolist()} "
+                            f"plant=[{_pl[0]:+.3f},{_pl[1]:+.3f},{_pl[2]:+.3f}] "
+                            f"tray=[{_tg[0]:+.3f},{_tg[1]:+.3f},{_tg[2]:+.3f}] "
+                            f"tcp=[{_tc[0]:+.3f},{_tc[1]:+.3f},{_tc[2]:+.3f}] "
+                            f"grip={_gp:.4f} attach={_atch}",
+                            flush=True,
+                        )
+                    except Exception as _exc:
+                        print(f"[TRACE] err: {_exc}", flush=True)
 
                 if bool(terminated[0]) or bool(truncated[0]):
                     term_info = info.get("termination", {}) if isinstance(info, dict) else {}

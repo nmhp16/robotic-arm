@@ -1,0 +1,186 @@
+# Pick a leaf-plant OUT of a vial sitting on the table and place it on
+# a tray off to the side. Reverse direction of put_plant_in_vial.
+#
+# Tweezer is held at midshaft (mounted on the SCARA wrist). Workspace
+# is on the table top (z=0) — the SCARA's TCP only reaches z=~0.065 to
+# z=~0.265 with the long tweezer, so the plant + vial can't sit on a
+# tall pedestal.
+#
+# Vial collision is disabled (cosmetic only); plant rests on the table
+# directly. Visually the plant appears inside the vial because the vial
+# wraps around it, but PhysX-wise plant interacts only with the table.
+#
+# Uses the default _runtime archetype (HOVER -> DESCEND -> GRASP -> LIFT
+# -> MOVE -> PLACE -> RELEASE). Grasp point is on the visible stem
+# above the leaves so the tweezer doesn't fight foliage on descent.
+#
+# To run:
+#   ./scripts/oracle.sh   --task pick_plant_out_of_vial --num-demos 15
+#   ./scripts/annotate.sh --task pick_plant_out_of_vial
+#   ./scripts/mimic.sh    --task pick_plant_out_of_vial --num-demos 500
+#   ./scripts/train.sh    --task pick_plant_out_of_vial
+#   ./scripts/eval.sh     --task pick_plant_out_of_vial
+
+task:
+  name: pick_plant_out_of_vial
+  instruction: pick the plant out of the vial and place it on the tray
+  gym_id: Isaac-PickPlantOutOfVial-T3-IK-Rel-v0
+  mimic_gym_id: Isaac-PickPlantOutOfVial-T3-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+robot:
+  type: t3_401_tweezer
+  arm_joints: [joint_1, joint_2, joint_3, joint_4]
+  ee_body: tool0_aligned
+  tcp_z_offset: 0.095
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.005
+  gripper_closed_threshold: 0.0025
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# vial: kinematic, sits on the table directly. Collision disabled so
+#   plant can spawn "inside" without being ejected.
+# plant: spawned with body z ~= 0.05 (settles on table). Visually the
+#   stem comes up out of the vial mouth, leaves are above the rim.
+# tray: cuboid pad off to the +y side, where the policy is supposed to
+#   put the plant down.
+objects:
+  vial:
+    role: distractor
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    kinematic: true
+    collision: false                          # cosmetic; plant interacts with table
+    spawn:
+      x: [0.30, 0.32]
+      y: [-0.02, 0.00]
+      z: [0.035, 0.035]                       # vial centroid -> base z=0, top z=0.07
+      yaw: [0.0, 0.0]
+  plant:
+    role: pickable
+    type: usd
+    usd_path: local:assets/leaf_plant/leaf_plant.usd
+    scale: [1.0, 1.0, 1.0]
+    friction:                                 # high friction so tweezer pinch holds
+      static: 3.0
+      dynamic: 2.5
+      restitution: 0.0
+    spawn:
+      x: [0.30, 0.32]                         # spawn xy matches the vial
+      y: [-0.02, 0.00]
+      z: [0.10, 0.10]                         # spawn 10 cm above table; settles around 0.06
+      yaw: [-0.2, 0.2]
+  tray:
+    # Vestigial — required for the YAML schema but unused: oracle is in
+    # pick-and-lift-only mode (see oracle.terminate_after_lift below).
+    # Kept as a tiny pad off-screen so it doesn't visually clutter the
+    # scene. Once the env builder accepts target=None we can drop this.
+    role: target
+    type: cuboid
+    size: [0.02, 0.02, 0.001]
+    mass: 0.001
+    color: [0.30, 0.40, 0.55]
+    kinematic: true
+    friction:
+      static: 1.0
+      dynamic: 0.8
+      restitution: 0.0
+    spawn:
+      x: [0.10, 0.10]
+      y: [0.30, 0.30]
+      z: [0.0005, 0.0005]
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+cameras:
+  table_cam:
+    pos: [1.0, 0.0, 0.8]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+success:
+  type: object_on_target
+  object: plant
+  target: tray
+  xy_threshold: 0.05
+  height_threshold: 0.10
+grasp_check:
+  type: object_grasped
+  object: plant
+  diff_threshold: 0.04
+
+# --- Scripted oracle (state machine) ---------------------------------------
+# Pick-and-lift-only sequence: HOVER -> DESCEND -> GRASP -> LIFT -> done.
+# No MOVE/PLACE/RELEASE — terminate_after_lift makes the oracle declare
+# success when LIFT reaches lift_height. The tray is vestigial (kept for
+# YAML schema reasons) and never visited.
+oracle:
+  hover_height: 0.15                          # tcp at plant.z + 0.15 = ~0.19 (mid-range)
+  grasp_z_offset: 0.025                       # tcp at plant.z + 0.025 = ~0.065 = inside upper
+                                              # stem (TCP min z is 0.065 due to J3 limits;
+                                              # any lower target gets clamped and the tips
+                                              # end up at the very top edge of the cylinder
+                                              # collision, missing the stem entirely)
+  lift_height: 0.22                           # near max retract; clears the vial top
+  place_z_offset: 0.0
+  max_dxy: 0.04
+  max_dz: 0.05
+  xy_reach_tol: 0.004                         # tight: stem is 4 mm dia; tweezer pinches
+                                              # the centerline so TCP must align within
+                                              # ~ stem radius for the close to grip
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.012
+  grasp_hold_steps: 18
+  release_hold_steps: 5
+  max_steps_per_episode: 300
+  max_episode_attempts_per_demo: 5
+  terminate_after_lift: true                  # ends the demo after the LIFT phase
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: pick_plant_out_of_vial_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the plant in the vial
+      next_description: Place the plant on the tray
+    - object: tray
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Place the plant on the tray
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/pick_plant_out_of_vial/demos.hdf5
+  annotated_path: data/annotated/pick_plant_out_of_vial/demos.hdf5
+  augmented_path: data/augmented/pick_plant_out_of_vial/demos.hdf5
+  hdf5_path: data/raw/pick_plant_out_of_vial/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_plant_out_of_vial
+
+eval:
+  checkpoint: checkpoints/pick_plant_out_of_vial/final

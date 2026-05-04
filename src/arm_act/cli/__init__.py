@@ -37,6 +37,11 @@ def isaaclab_script(rel_path: str) -> pathlib.Path:
 def register_tasks() -> None:
     """Trigger gym registration of every ``tasks/<name>.yaml``.
 
-    Imports :mod:`arm_act.tasks` for its side effect.
+    Imports :mod:`arm_act.tasks` and explicitly calls its ``register()``
+    helper. The import alone is a no-op — registration is gated behind
+    that explicit call so it can be deferred until after AppLauncher
+    has initialized (the env_cfg builder needs the Omniverse ``pxr``
+    module, which is only importable post-AppLauncher).
     """
-    __import__("arm_act.tasks")
+    import arm_act.tasks  # noqa: F401
+    arm_act.tasks.register()

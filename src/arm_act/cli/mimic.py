@@ -40,7 +40,9 @@ def main() -> int:
     cfg = load(args.task)
 
     generate = isaaclab_script("scripts/imitation_learning/isaaclab_mimic/generate_dataset.py")
-    register_tasks()
+    # Note: arm_act task gym registration happens INSIDE generate_dataset.py
+    # (we patched it to import arm_act.tasks after AppLauncher init).
+    # See the 4-line block at the top of that file.
 
     in_path = pathlib.Path(args.input or cfg["data"]["annotated_path"])
     out_path = pathlib.Path(args.output or cfg["data"]["augmented_path"])
@@ -62,7 +64,15 @@ def main() -> int:
         "--output_file", str(out_path),
         "--generation_num_trials", str(num_demos),
         "--num_envs", str(num_envs),
+        "--headless",       # without this, AppLauncher defaults to windowed
+                            # mode and env.reset() hangs forever waiting on a
+                            # display surface that never appears
         "--enable_cameras",
+        "--rendering_mode", "performance",  # matches the docs example;
+                            # without it, gym.make() crashes inside
+                            # ViewportCameraController.__init__ trying to read
+                            # `omni:kit:centerOfInterest` on a viewport prim
+                            # that doesn't exist in our headless+CUDA setup.
     ]
     runpy.run_path(str(generate), run_name="__main__")
     return 0

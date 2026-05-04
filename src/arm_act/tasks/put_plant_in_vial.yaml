@@ -1,0 +1,184 @@
+# Pick a leaf-plant off a pedestal and insert it stem-first into a wide
+# hollow vial sitting on the same pedestal. Tweezer is held at midshaft
+# (mounted to the SCARA wrist by a clamp body) so the U-spring extends
+# above and the tips extend below — same way a hand grips real tweezers.
+#
+# Workspace is elevated 18 cm because the SCARA + midshaft-held tweezer
+# only reaches ~10 cm below the wrist (vs ~20 cm for a U-spring grip),
+# so plant + vial need to sit higher to be reachable.
+#
+# Asset sources:
+#   - assets/wide_vial/wide_vial.usd  -> from test/cad/parts/wide_vial.py
+#   - assets/leaf_plant/leaf_plant.usd -> from test/cad/parts/leaf_plant.py
+#   - assets/t3_401_tweezer/...        -> midshaft-held tweezer URDF/USD
+#
+# To run:
+#   ./scripts/oracle.sh   --task put_plant_in_vial --num-demos 15
+#   ./scripts/annotate.sh --task put_plant_in_vial
+#   ./scripts/mimic.sh    --task put_plant_in_vial --num-demos 500
+#   ./scripts/train.sh    --task put_plant_in_vial
+#   ./scripts/eval.sh     --task put_plant_in_vial
+
+template: _runtime_jar
+
+task:
+  name: put_plant_in_vial
+  instruction: pick the plant off the platform and insert it into the vial
+  gym_id: Isaac-PutPlantInVial-T3-IK-Rel-v0
+  mimic_gym_id: Isaac-PutPlantInVial-T3-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+# Tweezer mounted at MIDSHAFT to the gripper_base clamp. Tweezer tips
+# extend ~95 mm below tool0_aligned (gripper_base 5 mm + 90 mm collision
+# arm) so tcp_z_offset = 0.095. gripper_close_m = 0.005 m to bring the
+# tips together (tweezer pinching stroke).
+robot:
+  type: t3_401_tweezer
+  arm_joints: [joint_1, joint_2, joint_3, joint_4]
+  ee_body: tool0_aligned
+  tcp_z_offset: 0.095
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.005
+  gripper_closed_threshold: 0.0025
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# pedestal: 18 cm tall riser elevating the workspace into the SCARA's
+#   reach envelope when carrying a midshaft-held tweezer. Sits in the
+#   centre of the workspace; plant and vial both spawn ON TOP of it.
+# plant: leaf_plant USD, ~80 mm tall stem with three leaves at z=72 mm.
+#   Stem cross-section ~3 mm so the tweezer (5 mm tip-to-tip closed) can
+#   pinch it cleanly at midshaft (~40 mm above plant base).
+# vial: wide_vial USD, 30 x 30 x 70 mm hollow cylinder with a 27 mm
+#   internal mouth — wider than the leaf cluster so plant goes in
+#   stem-first and leaves rest on or just above the rim.
+objects:
+  pedestal:
+    role: distractor
+    type: cuboid                              # primitive box w/ reliably-scaled collision
+    size: [0.15, 0.15, 0.18]                  # 15 cm x 15 cm x 18 cm
+    mass: 5.0
+    color: [0.45, 0.55, 0.40]
+    kinematic: true
+    friction:
+      static: 1.0
+      dynamic: 0.8
+      restitution: 0.0
+    spawn:
+      x: [0.30, 0.30]
+      y: [0.04, 0.04]
+      z: [0.09, 0.09]                         # pedestal centroid -> top at z=0.18
+      yaw: [0.0, 0.0]
+  plant:
+    role: pickable
+    type: usd
+    usd_path: local:assets/leaf_plant/leaf_plant.usd
+    scale: [1.0, 1.0, 1.0]
+    spawn:
+      x: [0.27, 0.30]
+      y: [0.07, 0.10]
+      z: [0.22, 0.22]                         # plant base = pedestal top + epsilon
+      yaw: [-0.2, 0.2]
+  vial:
+    role: target
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    kinematic: true
+    spawn:
+      x: [0.32, 0.34]
+      y: [-0.02, 0.00]
+      z: [0.215, 0.215]                       # vial base on pedestal top -> centroid z=0.215
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+# Table cam aimed slightly higher because the workspace is now ~22 cm
+# above the table. Wrist cam unchanged.
+cameras:
+  table_cam:
+    pos: [1.0, 0.0, 0.9]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+# Plant counts as inserted when its centroid is within 25 mm xy of the
+# vial centroid AND no more than 100 mm above the vial centroid (so the
+# plant has actually descended into the vial, not just hovered above it).
+success:
+  type: object_on_target
+  object: plant
+  target: vial
+  xy_threshold: 0.025
+  height_threshold: 0.10
+grasp_check:
+  type: object_grasped
+  object: plant
+  diff_threshold: 0.04
+
+# --- Scripted oracle (state machine extended for insertion) ----------------
+# Heights are absolute world-z values. With the workspace lifted to
+# z=0.18 (pedestal top), reachable TCP range is roughly z=0.21 to z=0.41.
+# All hover/lift/insert points must live in that band.
+oracle:
+  hover_height: 0.18                          # 18 cm above plant centroid -> tcp at ~0.40
+  grasp_z_offset: 0.04                        # grasp 4 cm above plant centroid (mid-stem)
+  lift_height: 0.40                           # near max retract; clears the vial rim
+  place_z_offset: 0.04
+  insert_z_offset: 0.04                       # release tcp 4 cm above vial centroid (just clears rim)
+  align_xy_tol: 0.012
+  retract_height: 0.40
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.018
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.012
+  grasp_hold_steps: 18
+  release_hold_steps: 8
+  max_steps_per_episode: 600
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: put_plant_in_vial_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the plant on the pedestal
+      next_description: Insert the plant into the vial
+    - object: vial
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Insert the plant into the vial
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/put_plant_in_vial/demos.hdf5
+  annotated_path: data/annotated/put_plant_in_vial/demos.hdf5
+  augmented_path: data/augmented/put_plant_in_vial/demos.hdf5
+  hdf5_path: data/raw/put_plant_in_vial/demos.hdf5
+
+training:
+  output_dir: checkpoints/put_plant_in_vial
+
+eval:
+  checkpoint: checkpoints/put_plant_in_vial/final

@@ -36,7 +36,9 @@ def main() -> int:
     cfg = load(args.task)
 
     annotate = isaaclab_script("scripts/imitation_learning/isaaclab_mimic/annotate_demos.py")
-    register_tasks()
+    # Note: arm_act task gym registration happens INSIDE annotate_demos.py
+    # (we patched it to import arm_act.tasks after AppLauncher init).
+    # See the 4-line block at the top of that file.
 
     in_path = pathlib.Path(args.input or cfg["data"]["raw_path"])
     out_path = pathlib.Path(args.output or cfg["data"]["annotated_path"])

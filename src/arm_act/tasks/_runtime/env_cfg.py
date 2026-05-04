@@ -12,6 +12,7 @@ The runtime registry calls this once per task at import time, then
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import isaaclab.sim as sim_utils
@@ -41,6 +42,8 @@ from . import events as events_mod
 from . import mdp
 from .base_env_cfg import PickPlaceEnvCfgBase
 from .robot_cfg import build_robot_cfg
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
 def build_env_cfg(spec: dict[str, Any], class_name: str) -> type:
@@ -99,6 +102,17 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     env_cfg.scene.pickable = _build_object_cfg(pickable_name, pickable, prim_suffix="Pickable")
     env_cfg.scene.target = _build_object_cfg(target_name, target, prim_suffix="Target")
 
+    # --- Distractor spawn (kinematic scene props the policy doesn't grasp) ---
+    # Anything with role: distractor in objects: (e.g., a pedestal under the
+    # vial, or a foreground prop) gets attached to the scene by name. They
+    # don't appear in observations or success terms — they're physical.
+    for distractor_name, distractor in objects.items():
+        if distractor.get("role") != "distractor":
+            continue
+        prim_suffix = "".join(part.capitalize() for part in distractor_name.split("_"))
+        cfg_obj = _build_object_cfg(distractor_name, distractor, prim_suffix=prim_suffix)
+        setattr(env_cfg.scene, distractor_name, cfg_obj)
+
     # --- Reset events: arm jitter + pickable/target pose randomization ----
     @configclass
     class _Events:
@@ -128,6 +142,24 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                 "pose_range": _spawn_pose_range(target["spawn"]),
                 "min_separation": 0.0,
                 "asset_cfgs": [SceneEntityCfg("target")],
+            },
+        )
+        # Interval mode with a zero-second window means the event manager
+        # fires this term every env step (after physics, before next obs).
+        # See ``mdp.kinematic_attach_payload`` for the rationale — bypasses
+        # GPU-PhysX friction non-determinism by snapping the payload to the
+        # gripper while the jaws are closed.
+        kinematic_attach = EventTerm(
+            func=mdp.kinematic_attach_payload,
+            mode="interval",
+            interval_range_s=(0.0, 0.0),
+            is_global_time=False,
+            params={
+                "payload_cfg": SceneEntityCfg("pickable"),
+                "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+                "driver_joint": driver_joint,
+                "closed_threshold": closed_threshold,
+                "capture_distance": 0.10,
             },
         )
 
@@ -220,6 +252,11 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     # --- Misc sim settings + teleop device --------------------------------
     env_cfg.sim.render.antialiasing_mode = "DLAA"
     env_cfg.num_rerenders_on_reset = 3
+    # Apply gravity (and other external forces) every solver iteration. Without
+    # this, GPU-PhysX can produce noticeably non-deterministic contact-rich
+    # trajectories — recording-vs-replay of oracle demos diverges enough to
+    # drop a 2 cm cuboid out of a parallel-jaw grip mid-trajectory.
+    env_cfg.sim.physx.enable_external_forces_every_iteration = True
     env_cfg.teleop_devices = DevicesCfg(
         devices={
             "keyboard": Se3KeyboardCfg(
@@ -252,13 +289,15 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
     prim_path = f"{{ENV_REGEX_NS}}/{prim_suffix}"
 
     if obj_type == "cuboid":
+        kinematic = bool(obj.get("kinematic", False))
         rigid_props = RigidBodyPropertiesCfg(
             solver_position_iteration_count=16,
             solver_velocity_iteration_count=1,
             max_angular_velocity=1000.0,
             max_linear_velocity=1000.0,
             max_depenetration_velocity=5.0,
-            disable_gravity=False,
+            disable_gravity=kinematic,
+            kinematic_enabled=kinematic,
         )
         friction = obj.get("friction") or {"static": 0.5, "dynamic": 0.5, "restitution": 0.0}
         material = sim_utils.RigidBodyMaterialCfg(
@@ -285,13 +324,44 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
             kinematic_enabled=bool(obj.get("kinematic", False)),
             disable_gravity=bool(obj.get("kinematic", False)),
         )
+        # Optional `collision: false` in YAML disables collision for this
+        # asset. Useful for kinematic decoration that the policy shouldn't
+        # interact with physically — e.g. a hollow vial whose convex
+        # decomposition collides with anything inside it instead of being
+        # truly hollow. Default is collision enabled (matches old behavior).
+        collision_props = None
+        if obj.get("collision", True) is False:
+            collision_props = CollisionPropertiesCfg(collision_enabled=False)
+        # usd_path may be either a Nucleus-relative path (Props/Blocks/...) or
+        # a project-relative path. ``local:`` prefix marks a repo-relative path.
+        raw = str(obj["usd_path"])
+        if raw.startswith("local:"):
+            usd_full = os.path.join(_REPO_ROOT, raw[len("local:") :])
+        elif raw.startswith("/") or raw.startswith("file://"):
+            usd_full = raw
+        else:
+            usd_full = f"{ISAAC_NUCLEUS_DIR}/{raw}"
+        # Locally-converted USDs are produced via UrdfConverter which marks
+        # the root with ArticulationRootAPI even for single-link assets.
+        # That conflicts with RigidObjectCfg, which expects a plain rigid
+        # body. Disable the articulation root for ``local:`` assets.
+        articulation_props = None
+        if raw.startswith("local:"):
+            articulation_props = sim_utils.ArticulationRootPropertiesCfg(
+                articulation_enabled=False,
+            )
+        # Note: friction is baked into the converted USD by
+        # convert_cad_assets.py at conversion time (UsdFileCfg in this
+        # Isaac Lab build does not accept physics_material directly).
         return RigidObjectCfg(
             prim_path=prim_path,
             init_state=init_state,
             spawn=UsdFileCfg(
-                usd_path=f"{ISAAC_NUCLEUS_DIR}/{obj['usd_path']}",
+                usd_path=usd_full,
                 scale=tuple(obj.get("scale", (1.0, 1.0, 1.0))),
                 rigid_props=rigid_props,
+                articulation_props=articulation_props,
+                collision_props=collision_props,
             ),
         )
 

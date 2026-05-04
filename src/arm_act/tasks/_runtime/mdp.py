@@ -127,6 +127,74 @@ def object_obs(
     )
 
 
+def kinematic_attach_payload(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor | None,
+    payload_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.01,
+    capture_distance: float = 0.10,
+) -> None:
+    """Snap the payload's pose to follow the gripper while the gripper is
+    closed, ignoring dynamic-contact friction physics for the duration.
+
+    Why: GPU PhysX is non-deterministic at the static-friction limit, which
+    makes the cuboid micro-slip out of a parallel-jaw grip on replay. The
+    contact-rich phases (CLOSE / LIFT / MOVE / PLACE) thus don't reproduce
+    the recording, so imitation-learning data has trajectories whose
+    actions don't actually achieve their recorded outcomes. This event term
+    detaches the held-payload phase from physics: once the jaws close and
+    the payload is within ``capture_distance`` of the TCP, the payload
+    becomes a kinematic "child" of the gripper. Released when the jaws
+    reopen. Trades realism (real grippers can drop things) for replayable
+    deterministic data, which is what the imitation pipeline needs.
+
+    Wire as ``mode="interval"`` with ``interval_range_s=(0.0, 0.0)`` so it
+    fires every env step (after physics, before the next observation).
+    """
+    if env_ids is None or len(env_ids) == 0:
+        return
+
+    if not hasattr(env, "_kinematic_attach_offset"):
+        env._kinematic_attach_offset = torch.zeros(env.num_envs, 3, device=env.device)
+        env._kinematic_attach_active = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    payload: RigidObject = env.scene[payload_cfg.name]
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    robot: Articulation = env.scene["robot"]
+    try:
+        grip_idx = robot.data.joint_names.index(driver_joint)
+    except ValueError:
+        return  # gripper missing — nothing to do
+
+    grip_pos = robot.data.joint_pos[:, grip_idx]
+    is_closed = grip_pos > closed_threshold
+    tcp_w = ee_frame.data.target_pos_w[:, 0, :]
+    payload_pos_w = payload.data.root_pos_w
+    near_tcp = torch.linalg.vector_norm(tcp_w - payload_pos_w, dim=-1) < capture_distance
+
+    upright = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device)
+    zero_vel = torch.zeros(1, 6, device=env.device)
+    for env_id in env_ids.tolist():
+        active = bool(env._kinematic_attach_active[env_id])
+        if active and not is_closed[env_id]:
+            # Release: leave payload where it is, return to dynamic physics.
+            env._kinematic_attach_active[env_id] = False
+            continue
+        if active:
+            target_pos = tcp_w[env_id] + env._kinematic_attach_offset[env_id]
+            pose = torch.cat([target_pos.unsqueeze(0), upright.unsqueeze(0)], dim=-1)
+            ids = torch.tensor([env_id], device=env.device, dtype=torch.long)
+            payload.write_root_pose_to_sim(pose, env_ids=ids)
+            payload.write_root_velocity_to_sim(zero_vel, env_ids=ids)
+            continue
+        if is_closed[env_id] and near_tcp[env_id]:
+            # First contact close: capture current TCP→payload offset and lock.
+            env._kinematic_attach_offset[env_id] = payload_pos_w[env_id] - tcp_w[env_id]
+            env._kinematic_attach_active[env_id] = True
+
+
 def object_grasped(
     env: ManagerBasedRLEnv,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
