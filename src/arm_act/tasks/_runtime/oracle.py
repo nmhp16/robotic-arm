@@ -41,6 +41,35 @@ class Phase(Enum):
 
 
 @dataclass(frozen=True)
+class _EpisodeJitter:
+    """Per-episode random variability injected into the scripted oracle so
+    the recorded dataset doesn't have N near-identical trajectories. ACT
+    (and any imitation method) mode-collapses onto the dataset mean when
+    every demo is the same straight-line path — the model's lowest-loss
+    solution becomes "output the average action" without conditioning on
+    state. This struct samples per-episode offsets/pauses that are still
+    geometrically valid (waypoints stay reachable) but make every demo
+    visibly different in the visual stream and the joint trajectory.
+
+    Sample once at the start of each episode; the values are fixed for
+    the whole run so a single demo is internally consistent.
+    """
+    hover_height: float        # ±5 cm around params.hover_height
+    grasp_z_offset: float      # ±1 cm
+    lift_height: float         # ±2 cm
+    place_z_offset: float      # ±1 cm
+    descend_xy_offset_x: float  # ±1 cm offset from plant xy at DESCEND
+    descend_xy_offset_y: float
+    move_xy_offset_x: float    # ±1 cm offset from tray xy at MOVE/PLACE
+    move_xy_offset_y: float
+    max_dxy: float             # in [0.02, 0.06] — varies demo speed
+    max_dz: float              # in [0.02, 0.06]
+    extra_hover_pause: int     # 0–20 extra steps held at HOVER
+    extra_lift_pause: int      # 0–15 extra steps held at LIFT
+    grasp_hold_steps: int      # 10–25 (vs fixed 15 before)
+
+
+@dataclass(frozen=True)
 class _OracleParams:
     hover_height: float
     grasp_z_offset: float
@@ -160,12 +189,20 @@ def main(spec: dict[str, Any]) -> int:
         video_table: list = []
         video_wrist: list = []
 
+        # Per-episode RNG so each demo's jitter is reproducible from the
+        # CLI seed but different across demos.
+        import numpy as _np
+        jitter_rng_root = _np.random.default_rng(seed=args.seed)
+
         while exported < args.num_demos and episode_idx < max_attempts:
             episode_idx += 1
             obs, _ = env.reset()
+            jitter = _sample_jitter(params, jitter_rng_root.spawn(1)[0])
 
             phase = Phase.HOVER
             hold_counter = 0
+            hover_pause_counter = 0
+            lift_pause_counter = 0
             succeeded = False
             prev_phase = None
             lift_xy_ref = None         # TCP xy frozen at LIFT entry
@@ -186,11 +223,11 @@ def main(spec: dict[str, Any]) -> int:
                 # Post-GRASP: freeze xy so reading the pickable's pose (which now
                 # rides the arm) doesn't form a feedback loop dragging it out of the jaws.
                 pickable_for_plan = grasp_pickable_pos if grasp_pickable_pos is not None else pickable_now
-                waypoints = _plan(pickable_for_plan, target_now, lift_xy_ref, params)
+                waypoints = _plan(pickable_for_plan, target_now, lift_xy_ref, params, jitter)
 
                 wp_pos, gripper_open = waypoints[phase]
                 reached = _reached(tcp, wp_pos, phase, params)
-                action = _compute_action(tcp, wp_pos, gripper_open, params)
+                action = _compute_action(tcp, wp_pos, gripper_open, params, jitter)
 
                 if phase is not prev_phase or step % 20 == 0:
                     print(
@@ -205,9 +242,19 @@ def main(spec: dict[str, Any]) -> int:
 
                 if phase in (Phase.GRASP, Phase.RELEASE):
                     hold_counter += 1
-                    if phase is Phase.GRASP and hold_counter >= params.grasp_hold_steps:
+                    if phase is Phase.GRASP and hold_counter >= jitter.grasp_hold_steps:
                         phase = Phase.LIFT
                         hold_counter = 0
+                elif reached and phase is Phase.HOVER and hover_pause_counter < jitter.extra_hover_pause:
+                    # Hold the gripper hovering above the plant for a few extra
+                    # steps before descending. Mimics the natural human pause
+                    # to "look before you leap".
+                    hover_pause_counter += 1
+                elif reached and phase is Phase.LIFT and lift_pause_counter < jitter.extra_lift_pause and not params.terminate_after_lift:
+                    # Same idea at LIFT — pause briefly with the cuboid raised
+                    # before starting the lateral move. Skipped in
+                    # ``terminate_after_lift`` mode (early-success tasks).
+                    lift_pause_counter += 1
                 elif reached:
                     # Pick-and-lift-only mode: declare success on LIFT
                     # completion; never advance to MOVE.
@@ -326,22 +373,61 @@ def _save_oracle_videos(out_path, table_frames, wrist_frames, fps: int) -> None:
         print(f"wrote {path}", flush=True)
 
 
-def _plan(pickable_pos, target_pos, lift_xy_ref, p: _OracleParams) -> dict:
+def _plan(
+    pickable_pos,
+    target_pos,
+    lift_xy_ref,
+    p: _OracleParams,
+    j: _EpisodeJitter | None = None,
+) -> dict:
     lift_xy = lift_xy_ref if lift_xy_ref is not None else pickable_pos[:2]
+    if j is None:
+        hover_h = p.hover_height
+        grasp_z = p.grasp_z_offset
+        lift_h = p.lift_height
+        place_z = p.place_z_offset
+        d_off_x = d_off_y = 0.0
+        m_off_x = m_off_y = 0.0
+    else:
+        hover_h = j.hover_height
+        grasp_z = j.grasp_z_offset
+        lift_h = j.lift_height
+        place_z = j.place_z_offset
+        d_off_x, d_off_y = j.descend_xy_offset_x, j.descend_xy_offset_y
+        m_off_x, m_off_y = j.move_xy_offset_x, j.move_xy_offset_y
     return {
-        Phase.HOVER:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.hover_height), True),
-        Phase.DESCEND: (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.grasp_z_offset), True),
-        Phase.GRASP:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + p.grasp_z_offset), False),
-        Phase.LIFT:    (_xyz(float(lift_xy[0]), float(lift_xy[1]), p.lift_height), False),
-        Phase.MOVE:    (_xyz(target_pos[0], target_pos[1], p.lift_height), False),
-        Phase.PLACE:   (_xyz(target_pos[0], target_pos[1], target_pos[2] + p.place_z_offset), False),
-        Phase.RELEASE: (_xyz(target_pos[0], target_pos[1], target_pos[2] + p.place_z_offset), True),
+        Phase.HOVER:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + hover_h), True),
+        Phase.DESCEND: (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), True),
+        Phase.GRASP:   (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), False),
+        Phase.LIFT:    (_xyz(float(lift_xy[0]), float(lift_xy[1]), lift_h), False),
+        Phase.MOVE:    (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, lift_h), False),
+        Phase.PLACE:   (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), False),
+        Phase.RELEASE: (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), True),
     }
 
 
 def _xyz(x: float, y: float, z: float):
     import numpy as np
     return np.array([x, y, z], dtype=np.float32)
+
+
+def _sample_jitter(p: _OracleParams, rng) -> _EpisodeJitter:
+    """Draw per-episode variability."""
+    return _EpisodeJitter(
+        hover_height=float(p.hover_height + rng.uniform(-0.05, 0.05)),
+        grasp_z_offset=float(p.grasp_z_offset + rng.uniform(-0.01, 0.01)),
+        lift_height=float(p.lift_height + rng.uniform(-0.02, 0.02)),
+        place_z_offset=float(p.place_z_offset + rng.uniform(-0.01, 0.01)),
+        descend_xy_offset_x=float(rng.uniform(-0.01, 0.01)),
+        descend_xy_offset_y=float(rng.uniform(-0.01, 0.01)),
+        move_xy_offset_x=float(rng.uniform(-0.01, 0.01)),
+        move_xy_offset_y=float(rng.uniform(-0.01, 0.01)),
+        max_dxy=float(rng.uniform(0.02, 0.06)),
+        max_dz=float(rng.uniform(0.02, 0.06)),
+        extra_hover_pause=int(rng.integers(0, 21)),
+        extra_lift_pause=int(rng.integers(0, 16)),
+        grasp_hold_steps=int(rng.integers(10, 26)),
+    )
 
 
 def _next_phase(phase: Phase) -> Phase:
@@ -358,12 +444,14 @@ def _reached(tcp, wp_pos, phase: Phase, p: _OracleParams) -> bool:
     return dxy < p.xy_reach_tol and dz < z_tol
 
 
-def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams):
+def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams, j: _EpisodeJitter | None = None):
     import numpy as np
 
-    dx = float(np.clip(wp_pos[0] - tcp[0], -p.max_dxy, p.max_dxy))
-    dy = float(np.clip(wp_pos[1] - tcp[1], -p.max_dxy, p.max_dxy))
-    dz = float(np.clip(wp_pos[2] - tcp[2], -p.max_dz, p.max_dz))
+    max_dxy = j.max_dxy if j is not None else p.max_dxy
+    max_dz = j.max_dz if j is not None else p.max_dz
+    dx = float(np.clip(wp_pos[0] - tcp[0], -max_dxy, max_dxy))
+    dy = float(np.clip(wp_pos[1] - tcp[1], -max_dxy, max_dxy))
+    dz = float(np.clip(wp_pos[2] - tcp[2], -max_dz, max_dz))
     # Isaac Lab BinaryJointAction: positive = OPEN, negative = CLOSE.
     gripper_cmd = 1.0 if gripper_open else -1.0
     if p.ik_command_type == "pose":
