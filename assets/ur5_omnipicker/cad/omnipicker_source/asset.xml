@@ -1,0 +1,30 @@
+<mujoco model="pw_gripper_asset">
+  <!-- Place-Workpiece Gripper Meshes -->
+  <mesh name="gripper_l_base_link" file="../../meshes/gripper/workpiece/base_link.STL" />
+  <mesh name="gripper_l_base_link_1" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_01.STL" />
+  <mesh name="gripper_l_base_link_2" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_02.STL" />
+  <mesh name="gripper_l_base_link_3" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_03.STL" />
+  <mesh name="gripper_l_base_link_4" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_04.STL" />
+  <mesh name="gripper_l_base_link_5" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_05.STL" />
+  <mesh name="gripper_l_base_link_6" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_06.STL" />
+  <mesh name="gripper_l_base_link_7" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_07.STL" />
+  <mesh name="gripper_l_base_link_8" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_08.STL" />
+  <mesh name="gripper_l_base_link_9" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_09.STL" />
+  <mesh name="gripper_l_base_link_10" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_10.STL" />
+  <mesh name="gripper_l_base_link_11" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_11.STL" />
+
+
+  <mesh name="gripper_r_base_link" file="../../meshes/gripper/workpiece/base_link.STL" />
+  <mesh name="gripper_r_base_link_1" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_01.STL" />
+  <mesh name="gripper_r_base_link_2" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_02.STL" />
+  <mesh name="gripper_r_base_link_3" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_03.STL" />
+  <mesh name="gripper_r_base_link_4" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_04.STL" />
+  <mesh name="gripper_r_base_link_5" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_05.STL" />
+  <mesh name="gripper_r_base_link_6" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_06.STL" />
+  <mesh name="gripper_r_base_link_7" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_07.STL" />
+  <mesh name="gripper_r_base_link_8" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_08.STL" />
+  <mesh name="gripper_r_base_link_9" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_09.STL" />
+  <mesh name="gripper_r_base_link_10" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_10.STL" />
+  <mesh name="gripper_r_base_link_11" file="../../meshes/gripper/workpiece/convex/wuliao_Collision_11.STL" />
+
+</mujoco>

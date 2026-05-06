@@ -1,0 +1,203 @@
+# Pick a vial OUT of the holder rack and place it on the tray.
+#
+# UR5 + AgiBot OmniPicker variant. Mirrors the structure of
+# pick_plant_out.yaml but retargeted for:
+#   - the larger UR5 reach envelope (~850mm vs T3-401's 400mm)
+#   - the OmniPicker's 24mm-per-finger stroke (vs the T3-401 paddle gripper's 40mm)
+#   - a multi-slot holder rack as the source fixture, with the wide_vial
+#     asset spawning at one slot per episode
+#
+# To run (after the USD conversion step, see below):
+#   ./scripts/oracle.sh   --task pick_vial_from_holder --num-demos 15
+#   ./scripts/annotate.sh --task pick_vial_from_holder
+#   ./scripts/mimic.sh    --task pick_vial_from_holder --num-demos 500
+#   ./scripts/train.sh    --task pick_vial_from_holder
+#   ./scripts/eval.sh     --task pick_vial_from_holder
+#
+# One-time USD generation (Isaac Lab needed):
+#   env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p \
+#       scripts/convert_ur5_omnipicker.py
+#   env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p \
+#       scripts/convert_holder.py
+
+task:
+  name: pick_vial_from_holder
+  instruction: pick the vial out of the holder slot and place it on the tray
+  gym_id: Isaac-PickVialFromHolder-UR5-IK-Rel-v0
+  mimic_gym_id: Isaac-PickVialFromHolder-UR5-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+# UR5 6-axis arm + OmniPicker. Joint names from the URDF
+# (assets/ur5_omnipicker/ur5_omnipicker.urdf). ``ik_command_type: pose``
+# uses full 6-DOF pose targets — the UR5's 6 DOF can realize them, unlike
+# the T3-401 (4 DOF, position-only).
+robot:
+  type: ur5_omnipicker
+  arm_joints:
+    - shoulder_pan_joint
+    - shoulder_lift_joint
+    - elbow_joint
+    - wrist_1_joint
+    - wrist_2_joint
+    - wrist_3_joint
+  ee_body: tool0_aligned
+  ik_command_type: pose
+  tcp_z_offset: 0.143              # TCP sits 143mm beyond gripper_base origin,
+                                   # matches the AgiBot G1_omnipicker USD's
+                                   # gripper_l_center_joint (PhysicsFixedJoint
+                                   # localPos0=(0, 0, 0.14308) in base_link frame)
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0              # joint at 0 = fingers fully open (53mm spread)
+  gripper_close_m: 0.024           # joint at 0.024 = fingers near centerline (5mm gap)
+  gripper_closed_threshold: 0.012  # halfway through stroke = vial captured
+  gripper_driver_joint: finger_left_joint
+
+# --- Scene objects ----------------------------------------------------------
+# The pickable is the wide_vial (mass 18g, ~25mm OD). It spawns at one
+# slot in the holder. To start with, the spawn is a small jitter window
+# around slot 2 (the third from the front, well inside the UR5 reach).
+# Future variant: randomize across all 6 slots — ALl six slot centers
+# in WORLD coords, with the holder placed at (0.5, 0.0, 0.0):
+#     world_y = -0.0856 + slot_y_local
+# slot_y_local from the STL analysis: 0.0145, 0.0430, 0.0715,
+#                                     0.1000, 0.1285, 0.1570 m
+#     -> world_y: -0.0711, -0.0426, -0.0141, 0.0144, 0.0429, 0.0714
+# all at world_x = 0.5 ± a couple mm, world_z = 0.18 (top of slot).
+#
+# The holder mesh has its corner at the URDF origin (not centered), so
+# placing the rack centered at world (0.5, 0.0) requires spawn xyz =
+# (0.475, -0.0856, 0.0). Done in the distractor block below.
+objects:
+  vial:
+    role: pickable
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    spawn:
+      # Slot 2 (Y_local = 0.0715 m -> world Y = -0.0141 m). Small jitter
+      # so the policy doesn't memorize a single point. Z=0.18 puts the
+      # vial centroid just above the slot opening (rack top is z=0.1625);
+      # physics settle drops it into the slot during reset.
+      x: [0.495, 0.505]
+      y: [-0.020, -0.008]
+      z: [0.18, 0.18]
+      yaw: [-0.1, 0.1]
+  tray:
+    role: target
+    type: usd
+    usd_path: Props/Blocks/green_block.usd
+    scale: [3.0, 3.0, 0.2]
+    kinematic: true
+    spawn:
+      # Tray off to the +Y side of the holder, well clear of the rack
+      # but inside UR5's comfortable reach.
+      x: [0.50, 0.55]
+      y: [0.25, 0.32]
+      z: [0.0103, 0.0103]
+      yaw: [0.0, 0.0]
+  rack:
+    role: distractor
+    type: usd
+    usd_path: local:assets/holder/holder.usd
+    kinematic: true
+    spawn:
+      # Holder mesh has its corner at the URDF origin (bbox 0..0.0503,
+      # 0..0.1712, 0..0.1625 m). Offset by -(half_x, half_y, 0) so the
+      # rack ends up centered on (0.5, 0.0) in world coords with its
+      # bottom on the table.
+      x: [0.475, 0.475]
+      y: [-0.0856, -0.0856]
+      z: [0.0, 0.0]
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+# Re-aimed for UR5 workspace (objects at x ≈ 0.50, vs T3-401's x ≈ 0.30).
+# table_cam moved further out and higher; wrist cam unchanged.
+cameras:
+  table_cam:
+    pos: [1.4, 0.0, 1.0]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+# Success: vial's centroid is over the tray pad and the gripper has
+# released. xy_threshold loose because the tray is ~15cm across after
+# scale=3.0.
+success:
+  type: object_on_target
+  object: vial
+  target: tray
+  xy_threshold: 0.07
+  height_threshold: 0.12
+grasp_check:
+  type: object_grasped
+  object: vial
+  diff_threshold: 0.06
+
+# --- Scripted oracle (state machine) ---------------------------------------
+# Heights tuned for a tall holder (top at z=0.1625) and the wide_vial.
+# hover_height = above the slot opening; descend to grasp_z_offset (just
+# below slot opening so the gripper fingers wrap the vial at its
+# upper rim); lift clears the rack height with margin.
+oracle:
+  hover_height: 0.30            # 30cm above vial centroid -> tcp at z ~0.48
+  grasp_z_offset: 0.04          # grasp 4cm above vial centroid (vial ~5cm tall;
+                                # grip near upper third for stable lift)
+  lift_height: 0.45             # well clear of the 16cm-tall holder
+  place_z_offset: 0.18          # vial bottom touches the tray pad
+                                # (tray top z=0.020 + vial half-len ~0.025
+                                #  + 0.135 stand-off = TCP at z=0.180 = target.z + 0.18)
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.020
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.008
+  grasp_hold_steps: 15
+  release_hold_steps: 5
+  max_steps_per_episode: 500    # 6-DOF arm needs more steps than the SCARA
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: pick_vial_from_holder_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: vial
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the vial in the holder slot
+      next_description: Place the vial on the tray
+    - object: tray
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Place the vial on the tray
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/pick_vial_from_holder/demos.hdf5
+  annotated_path: data/annotated/pick_vial_from_holder/demos.hdf5
+  augmented_path: data/augmented/pick_vial_from_holder/demos.hdf5
+  hdf5_path: data/raw/pick_vial_from_holder/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_vial_from_holder
+
+eval:
+  checkpoint: checkpoints/pick_vial_from_holder/final

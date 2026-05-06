@@ -1,0 +1,71 @@
+<mujoco model="gripper_left">
+  <!-- 夹爪基座 -->
+  <body name="gripper_l_base_link" pos="0.095 0 0" quat="-0.5 0.5 -0.5 0.5">
+    <inertial pos="0.01778808 0.0585332 0.05714529" quat="0.5 0.5 0.5 0.5" mass="1.3757592"
+      diaginertia="0.0028087 0.00130123 0.00279029" />
+    <geom type="mesh" mesh="gripper_l_base_link" rgba="0.86667 0.86667 0.8902 1"/>
+    <geom type="mesh" mesh="gripper_l_base_link_1" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_2" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_3" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_4" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_5" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_6" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_7" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_8" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_9" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_10" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+    <geom type="mesh" mesh="gripper_l_base_link_11" rgba="0.86667 0.86667 0.8902 1" class="collision"/>
+
+    <!-- 外夹爪（主动） -->
+    <body name="gripper_l_outer_link1" pos="0.0265 -0.0134 0.098" quat="0.707107 0 0 0.707107">
+      <inertial pos="0.0151808 -0.0123302 0.0456963" quat="0.846353 0.0682721 0.0474439 0.526094"
+        mass="0.0366645" diaginertia="4.50797e-05 4.46339e-05 2.25641e-06" />
+      <joint name="idx41_gripper_l_outer_joint1" pos="0 0 0" axis="0 1 0" type="slide"
+        range="0 0.024" />
+      <!-- <geom type="mesh" mesh="gripper_l_outer_link1_1" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_2" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_3" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_4" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_5" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_6" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_outer_link1_7" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" /> -->
+
+    </body>
+
+    <!-- 内夹爪（从动） -->
+    <body name="gripper_l_inner_link1" pos="-0.0265 0.0134 0.098" quat="0.707107 0 0 -0.707107">
+      <inertial pos="0.0178381 0.0653971 0.0463019" quat="0.874213 -0.0127259 0.0439183 0.483386"
+        mass="0.0379014" diaginertia="4.57698e-05 4.46809e-05 2.49933e-06" />
+      <joint name="idx31_gripper_l_inner_joint1" pos="0 0 0" axis="0 1 0" type="slide"
+        range="0 0.024" />
+      <!-- <geom type="mesh" mesh="gripper_l_inner_link1_1" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_2" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_3" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_4" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_5" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_6" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" />
+      <geom type="mesh" mesh="gripper_l_inner_link1_7" rgba="0.77647 0.75686 0.73725 1"
+        class="collision" /> -->
+
+    </body>
+
+    <!-- 夹爪中心点 -->
+    <body name="gripper_l_center_link" pos="0 0 0.1" quat="0.707107 0 0 -0.707107">
+      <geom type="sphere" size="0.005" rgba="1 0 0 0.5" />
+    </body>
+  </body>
+
+</mujoco>

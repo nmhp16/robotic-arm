@@ -1,0 +1,44 @@
+<!-- actuator and sensor -->
+<mujoco model="hand_pw_right_actuator_sensor">
+
+  <contact>
+    <!-- gripper contact exclusions -->
+    <exclude body1="gripper_r_outer_link1" body2="gripper_r_inner_link1" />
+  </contact>
+
+  <actuator>
+    <!-- Gripper -->
+    <position name="position_idx71_gripper_r_inner_joint1"
+      joint="idx71_gripper_r_inner_joint1"
+      ctrlrange="0 0.024"
+      forcerange="-500 500"
+      kp="2000" kv="200" />
+  </actuator>
+
+  <equality>
+    <!-- Gripper: 内夹爪关节跟随外夹爪关节 -->
+    <joint name="gripper_r_inner_equality"
+      joint1="idx71_gripper_r_inner_joint1"
+      joint2="idx81_gripper_r_outer_joint1"
+      polycoef="0.0 1.0 0 0 0" />
+  </equality>
+
+  <sensor>
+    <!-- Gripper actuator position sensor -->
+    <actuatorpos name="actuatorpos_idx71_gripper_r_inner_joint1"
+      actuator="position_idx71_gripper_r_inner_joint1" />
+
+    <!-- Gripper joint position sensor -->
+    <jointpos name="jointpos_idx81_gripper_r_outer_joint1" joint="idx81_gripper_r_outer_joint1" />
+    <jointpos name="jointpos_idx71_gripper_r_inner_joint1" joint="idx71_gripper_r_inner_joint1" />
+
+    <!-- Gripper joint velocity sensor -->
+    <jointvel name="jointvel_idx81_gripper_r_outer_joint1" joint="idx81_gripper_r_outer_joint1" />
+    <jointvel name="jointvel_idx71_gripper_r_inner_joint1" joint="idx71_gripper_r_inner_joint1" />
+
+    <!-- Gripper joint effort sensor -->
+    <jointactuatorfrc name="torque_idx71_gripper_r_inner_joint1"
+      joint="idx71_gripper_r_inner_joint1" />
+
+  </sensor>
+</mujoco>

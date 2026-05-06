@@ -175,9 +175,105 @@ def _t3_401_tweezer() -> ArticulationCfg:
     )
 
 
+def _ur5_omnipicker() -> ArticulationCfg:
+    """UR5 6-axis arm + AgiBot OmniPicker parallel-jaw gripper.
+
+    Joint chain (matches assets/ur5_omnipicker/ur5_omnipicker.urdf):
+
+        shoulder_pan_joint   revolute about base Z
+        shoulder_lift_joint  revolute (perpendicular)
+        elbow_joint          revolute
+        wrist_1_joint        revolute
+        wrist_2_joint        revolute
+        wrist_3_joint        revolute (tool roll)
+        finger_left_joint /  finger_right_joint   independent prismatic fingers,
+                             driven in parallel by the gripper actuator (treat
+                             as a 1-DOF mimic-style gripper — both joints get
+                             the same command from BinaryJointPositionActionCfg)
+
+    Reach: ~850 mm (vs T3-401's 400 mm). Use task spawn ranges accordingly.
+    Home pose places the wrist roughly above the working volume in front of
+    the base — set ``ik_command_type: pose`` in the task YAML to use full
+    6-DOF pose targets instead of position-only IK.
+    """
+    usd_path = os.path.join(_REPO_ROOT, "assets", "ur5_omnipicker", "ur5_omnipicker.usd")
+    return ArticulationCfg(
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=usd_path,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                max_depenetration_velocity=5.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=False,
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+            ),
+            activate_contact_sensors=False,
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            # "Vertical ready" home: shoulder up, elbow forward, wrist down so
+            # tool0 +Z points roughly toward -Z (descending toward the table).
+            # EE ends up around (0.5, 0.0, 0.4) above the table — well within
+            # the workspace for the holder + tray task.
+            joint_pos={
+                "shoulder_pan_joint": 0.0,
+                "shoulder_lift_joint": -1.0,
+                "elbow_joint": 1.5,
+                "wrist_1_joint": -1.5,
+                "wrist_2_joint": -1.5708,
+                "wrist_3_joint": 0.0,
+                "finger_left_joint": 0.0,
+                "finger_right_joint": 0.0,
+            },
+            pos=(0.0, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        actuators={
+            # Shoulder + elbow: large rotary actuators carrying the bulk of
+            # the arm load. Stiffness sized for IK position-tracking with
+            # damping-dominated transient response.
+            "shoulder_elbow": ImplicitActuatorCfg(
+                joint_names_expr=["shoulder_pan_joint", "shoulder_lift_joint", "elbow_joint"],
+                effort_limit_sim=150.0,
+                velocity_limit_sim=3.14,
+                stiffness=4000.0,
+                damping=200.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+            # Wrists: lighter actuators, lower stiffness OK because they
+            # carry only the gripper + payload.
+            "wrist": ImplicitActuatorCfg(
+                joint_names_expr=["wrist_[1-3]_joint"],
+                effort_limit_sim=28.0,
+                velocity_limit_sim=3.14,
+                stiffness=1500.0,
+                damping=80.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+            # OmniPicker fingers: same firm-clamp profile as the T3-401
+            # simple gripper. The 24 mm-per-finger stroke + 5 mm closed gap
+            # means the fingers must hold against PhysX FP noise once the
+            # vial is captured.
+            "gripper": ImplicitActuatorCfg(
+                joint_names_expr=["finger_.*_joint"],
+                effort_limit_sim=200.0,
+                velocity_limit_sim=0.5,
+                stiffness=4000.0,
+                damping=80.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+        },
+    )
+
+
 ROBOT_BUILDERS: dict[str, Callable[[], ArticulationCfg]] = {
     "t3_401_simple_gripper": _t3_401_simple_gripper,
     "t3_401_tweezer": _t3_401_tweezer,
+    "ur5_omnipicker": _ur5_omnipicker,
 }
 
 
