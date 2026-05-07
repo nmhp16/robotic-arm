@@ -75,13 +75,13 @@ objects:
     usd_path: local:assets/wide_vial/wide_vial.usd
     scale: [1.0, 1.0, 1.0]
     spawn:
-      # Slot 2 (Y_local = 0.0715 m -> world Y = -0.0141 m). Small jitter
-      # so the policy doesn't memorize a single point. Z=0.18 puts the
-      # vial centroid just above the slot opening (rack top is z=0.1625);
-      # physics settle drops it into the slot during reset.
-      x: [0.495, 0.505]
+      # Vial spawn is centered on slot 3 of the laid-down rack, with
+      # the vial bottom 1 cm above the rack top so it falls naturally
+      # into place under gravity. Slot 3 world Y = -0.0141; slot world
+      # X center = 0.5575 (rack origin 0.4187 + 0.1375).
+      x: [0.555, 0.560]
       y: [-0.020, -0.008]
-      z: [0.18, 0.18]
+      z: [0.060, 0.060]
       yaw: [-0.1, 0.1]
   tray:
     role: target
@@ -101,12 +101,19 @@ objects:
     type: usd
     usd_path: local:assets/holder/holder.usd
     kinematic: true
+    collision: false
     spawn:
-      # Holder mesh has its corner at the URDF origin (bbox 0..0.0503,
-      # 0..0.1712, 0..0.1625 m). Offset by -(half_x, half_y, 0) so the
-      # rack ends up centered on (0.5, 0.0) in world coords with its
-      # bottom on the table.
-      x: [0.475, 0.475]
+      # Holder URDF now bakes pitch=-pi/2 so the rack lies flat with the
+      # 6 hole openings on its +Z face. Post-rotation footprint is
+      # 162.5 x 171.2 mm with 50.3 mm height. Origin is at the bottom-
+      # front-left corner, so to center the rack on (0.50, 0.0) the
+      # spawn xyz is (0.50 - 0.0813, 0.0 - 0.0856, 0).
+      #
+      # collision: false — the holder is a visual-only fixture. The
+      # convex_decomposition mesh on the slots is unreliable; we let
+      # the vial pass through the rack visually and rest at its spawn
+      # position. The kinematic_attach handles the grasp regardless.
+      x: [0.4187, 0.4187]
       y: [-0.0856, -0.0856]
       z: [0.0, 0.0]
       yaw: [0.0, 0.0]
@@ -151,13 +158,20 @@ grasp_check:
 # below slot opening so the gripper fingers wrap the vial at its
 # upper rim); lift clears the rack height with margin.
 oracle:
-  hover_height: 0.30            # 30cm above vial centroid -> tcp at z ~0.48
-  grasp_z_offset: 0.04          # grasp 4cm above vial centroid (vial ~5cm tall;
-                                # grip near upper third for stable lift)
+  hover_height: 0.30            # 30cm above vial centroid -> tcp at z ~0.34
+  grasp_z_offset: 0.04          # grasp 4cm above vial centroid (vial 7cm tall,
+                                # centroid at z=0.035; gripping near upper third
+                                # gives stable lift). TCP descends to z=0.075,
+                                # gripper fingertips ~7cm below TCP center.
   lift_height: 0.45             # well clear of the 16cm-tall holder
-  place_z_offset: 0.18          # vial bottom touches the tray pad
-                                # (tray top z=0.020 + vial half-len ~0.025
-                                #  + 0.135 stand-off = TCP at z=0.180 = target.z + 0.18)
+  place_z_offset: 0.22          # vial bottom clears the tray pad with margin.
+                                # tray spawn z=0.0103 with scale_z=0.2 (block top
+                                # at ~z=0.015). vial half-height=0.035, gripper
+                                # tcp_z_offset=0.143. Solving for vial-bottom-
+                                # above-tray-by-1cm: tcp_z = 0.015 + 0.01 + 0.035
+                                # + 0.143 = 0.203 -> place_z_offset=0.193 minimum;
+                                # round up to 0.22 for clearance against the
+                                # 6-DOF IK overshoot we saw in MOVE phase.
   max_dxy: 0.05
   max_dz: 0.05
   xy_reach_tol: 0.020

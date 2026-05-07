@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f /home/ketchup-core/test/robotic-arm/data/raw/put_plant_back/*)",
+      "Bash(timeout 200 ./scripts/oracle.sh --task put_plant_back --num-demos 1 --max-steps 200 --seed 0)",
+      "Bash(rtk grep *)",
+      "Bash(timeout 120 ./scripts/oracle.sh --task put_plant_back --num-demos 1 --max-steps 80 --seed 0)",
+      "Bash(timeout 100 ./scripts/oracle.sh --task put_plant_back --num-demos 1 --max-steps 80 --seed 0)",
+      "Bash(rm -f /home/ketchup-core/test/robotic-arm/data/raw/pick_plant_out/* /home/ketchup-core/test/robotic-arm/data/raw/put_plant_back/* /home/ketchup-core/test/robotic-arm/media/*.mp4)",
+      "Bash(./scripts/oracle.sh --task pick_plant_out --num-demos 2 --seed 0 --video-out media/pick_plant_out_oracle.mp4 --video-fps 20)",
+      "Bash(./scripts/oracle.sh --task put_plant_back --num-demos 1 --max-steps 100 --seed 0 --video-out media/put_plant_back_oracle.mp4 --video-fps 20)",
+      "Bash(rtk ls *)"
+    ]
+  }
+}

@@ -31,12 +31,15 @@ Thumbs.db
 
 /media/
 
-# Generated robot assets. The hand-written t3_401_simple_gripper.urdf is
-# the source-of-truth (no xacro indirection) and IS committed; everything
-# the URDF -> USD converter produces is regenerated locally.
+# Generated robot assets. Hand-authored URDFs are the source-of-truth (no
+# xacro indirection) and ARE committed; everything the URDF -> USD
+# converter produces is regenerated locally and stays out of the tree.
 /assets/**/*.usd
 /assets/**/*.urdf
-!/assets/t3_401_simple_gripper/t3_401_simple_gripper.urdf
+/assets/t3_401_simple_gripper/t3_401_simple_gripper.urdf
+/assets/ur5_omnipicker/ur5_omnipicker.urdf
+/assets/holder/holder.urdf
+/assets/wide_vial/wide_vial.urdf
 /assets/**/configuration/
 /assets/**/config.yaml
 /assets/**/.asset_hash
