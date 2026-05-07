@@ -29,6 +29,15 @@ env/
 .DS_Store
 Thumbs.db
 
+# FUSE / Nucleus filesystem writeback temp files. Appear when an open
+# file is replaced (USD conversion, settings rewrites). Always tiny,
+# always safe to delete, never useful to commit.
+.fuse_hidden*
+
+# Claude Code per-machine state: schedule lock, local permission overrides,
+# session memory. Personal to each clone; shouldn't be committed.
+.claude/
+
 /media/
 
 # Generated robot assets. Hand-authored URDFs are the source-of-truth (no

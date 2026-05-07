@@ -47,7 +47,7 @@ def main() -> None:
         merge_fixed_joints=False,
         convert_mimic_joints_to_normal_joints=False,
         force_usd_conversion=True,
-        collider_type="convex_hull",
+        collider_type="sdf",
         joint_drive=UrdfConverterCfg.JointDriveCfg(
             target_type="position",
             gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(stiffness=0.0, damping=0.0),

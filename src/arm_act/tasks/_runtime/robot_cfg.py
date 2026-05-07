@@ -256,11 +256,21 @@ def _ur5_omnipicker() -> ArticulationCfg:
             # OmniPicker fingers: same firm-clamp profile as the T3-401
             # simple gripper. The 24 mm-per-finger stroke + 5 mm closed gap
             # means the fingers must hold against PhysX FP noise once the
-            # vial is captured.
+            # vial is captured. velocity_limit_sim is intentionally low
+            # (0.1 m/s) so the gripper takes ~3 env.steps to fully close
+            # rather than ~1 — this gives the kinematic_attach event term
+            # (which fires once per env.step, post-physics) time to snap
+            # the vial to the TCP while the fingers are still in
+            # non-contact territory. With the previous 0.5 m/s, the
+            # fingers slammed shut within a single env.step (5 physics
+            # sub-steps × 0.01 s × 0.5 m/s = 25 mm of finger motion,
+            # enough to traverse the full 14 mm vial-finger gap and
+            # knock the vial 5-8 cm sideways before kinematic_attach
+            # could capture it.
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["finger_.*_joint"],
                 effort_limit_sim=200.0,
-                velocity_limit_sim=0.5,
+                velocity_limit_sim=0.1,
                 stiffness=4000.0,
                 damping=80.0,
                 friction=0.0,

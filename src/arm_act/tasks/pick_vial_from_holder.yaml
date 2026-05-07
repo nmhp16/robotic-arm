@@ -51,6 +51,14 @@ robot:
   gripper_open_m: 0.0              # joint at 0 = fingers fully open (53mm spread)
   gripper_close_m: 0.024           # joint at 0.024 = fingers near centerline (5mm gap)
   gripper_closed_threshold: 0.012  # halfway through stroke = vial captured
+  # The kinematic_attach event uses a much lower threshold so it fires on
+  # the first physics sub-step after the gripper is commanded to close —
+  # before the closing fingers can knock the vial sideways. Without this,
+  # the captured TCP→vial offset can be 5-8 cm laterally (fingers shove
+  # vial from one side), poisoning all downstream phases (LIFT/MOVE/
+  # RELEASE). 0.003 = ~12% of the close stroke; gripper command rate is
+  # ~0.005 m/sub-step so this fires in 1 sub-step.
+  gripper_kinematic_attach_threshold: 0.003
   gripper_driver_joint: finger_left_joint
 
 # --- Scene objects ----------------------------------------------------------

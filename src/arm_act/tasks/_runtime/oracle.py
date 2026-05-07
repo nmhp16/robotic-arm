@@ -5,13 +5,36 @@ Reads its waypoint geometry + state-machine timing from the task spec
 the cli wrapper passes the loaded spec.
 
 State machine per episode:
-  HOVER    → TCP at pickable.xy, pickable.z + hover_height, gripper open
-  DESCEND  → TCP at pickable.xy, pickable.z + grasp_z_offset
-  GRASP    → hold N steps with gripper=close
-  LIFT     → TCP at pickable.xy, lift_height
-  MOVE     → TCP at target.xy, lift_height
-  PLACE    → TCP at target.xy, target.z + place_z_offset
-  RELEASE  → gripper=open, hold until env's success termination fires
+  PRE_HOVER        → TCP at start.xy, hover_height (rise straight up at start xy)
+  HOVER            → TCP at pickable.xy, pickable.z + hover_height, gripper open
+  DESCEND_LATERAL  → TCP at pickable.xy + jitter_offset, hover_z (xy realign at hover height)
+  DESCEND          → TCP at pickable.xy + jitter_offset, pickable.z + grasp_z_offset (pure vertical)
+  GRASP            → hold N steps with gripper=close
+  LIFT             → TCP at pickable.xy, lift_height
+  MOVE             → TCP at target.xy, lift_height
+  PLACE            → TCP at target.xy, target.z + place_z_offset
+  RELEASE          → gripper=open, hold until env's success termination fires
+
+The phase splits exist to keep xy and z motion separated, because the
+UR5 + 6-DOF DLS IK does NOT produce clean linear paths between
+waypoints: the joint-space solution can swing wide, sweeping links
+through table-level space before settling at the commanded TCP. Two
+separations matter:
+
+  1. PRE_HOVER → HOVER (start of episode). The arm's home pose places
+     TCP very low (z ≈ 0.02 — tcp essentially at the table). Going
+     diagonally to (vial.xy, vial.z + hover_height) sends the gripper
+     body through a band of low-z xy positions that intersect the vial,
+     knocking it off the table during the very first action. PRE_HOVER
+     does pure vertical rise at the start xy first, so by the time
+     HOVER's xy realign fires, the gripper is 30 cm above the vial
+     and lateral motion is harmless.
+
+  2. HOVER → DESCEND_LATERAL → DESCEND. Same idea at the descent end:
+     diagonal motion plus the descend_xy jitter offset (±1 cm) drove the
+     finger through the vial's side, shifting the vial 5-8 cm laterally
+     so the kinematic-attach captured a bad offset. DESCEND_LATERAL
+     realigns xy at hover height; DESCEND drops pure vertical.
 """
 
 from __future__ import annotations
@@ -31,13 +54,15 @@ logger = logging.getLogger(__name__)
 
 
 class Phase(Enum):
-    HOVER = 1
-    DESCEND = 2
-    GRASP = 3
-    LIFT = 4
-    MOVE = 5
-    PLACE = 6
-    RELEASE = 7
+    PRE_HOVER = 1        # rise straight up at start xy to hover height
+    HOVER = 2
+    DESCEND_LATERAL = 3  # xy-align at hover height before vertical descent
+    DESCEND = 4
+    GRASP = 5
+    LIFT = 6
+    MOVE = 7
+    PLACE = 8
+    RELEASE = 9
 
 
 @dataclass(frozen=True)
@@ -199,14 +224,15 @@ def main(spec: dict[str, Any]) -> int:
             obs, _ = env.reset()
             jitter = _sample_jitter(params, jitter_rng_root.spawn(1)[0])
 
-            phase = Phase.HOVER
+            phase = Phase.PRE_HOVER
             hold_counter = 0
             hover_pause_counter = 0
             lift_pause_counter = 0
             succeeded = False
             prev_phase = None
-            lift_xy_ref = None         # TCP xy frozen at LIFT entry
-            grasp_pickable_pos = None  # pickable pose frozen at GRASP entry
+            lift_xy_ref = None          # TCP xy frozen at LIFT entry
+            pre_hover_xy_ref = None     # TCP xy frozen at PRE_HOVER entry (start of episode)
+            grasp_pickable_pos = None   # pickable pose frozen at GRASP entry
 
             for step in range(args.max_steps):
                 tcp = obs["policy"]["eef_pos"][0].cpu().numpy()
@@ -214,16 +240,35 @@ def main(spec: dict[str, Any]) -> int:
                 target_now = obs["policy"]["target_pos"][0].cpu().numpy()
                 gripper_rad = float(obs["policy"]["gripper_pos"][0, 0].cpu())
 
-                if phase is Phase.GRASP and grasp_pickable_pos is None:
+                if phase is Phase.PRE_HOVER and pre_hover_xy_ref is None:
+                    pre_hover_xy_ref = tcp[:2].copy()
+                if phase is Phase.DESCEND_LATERAL and grasp_pickable_pos is None:
+                    # Freeze the pickable position at the start of descent
+                    # (HOVER reach, vial still at spawn). DESCEND/GRASP plan
+                    # against this frozen pos instead of the live vial — so
+                    # if a finger micro-nudges the vial mid-descent, the TCP
+                    # keeps descending to the original xy instead of chasing
+                    # the displaced vial. Without this freeze, a small bump
+                    # spirals into a 10 cm chase as TCP and vial co-move
+                    # diagonally toward the table edge.
                     grasp_pickable_pos = pickable_now.copy()
                 if phase is Phase.LIFT and lift_xy_ref is None:
-                    lift_xy_ref = tcp[:2].copy()
+                    # Pull the lift waypoint xy 25% toward the robot base
+                    # (origin). Pure-vertical lift at the grasp xy hits a
+                    # near-singular UR5 config when the grasp is at extended
+                    # reach (~55 cm radius); the redundant 6-DOF DLS IK then
+                    # oscillates 100+ steps trying to hold xy while raising
+                    # z. Biasing toward the base shortens the radius from
+                    # ~0.55 m to ~0.41 m, well inside UR5's comfortable
+                    # envelope, and the subsequent MOVE phase does the
+                    # lateral traversal from there.
+                    lift_xy_ref = (tcp[:2] * 0.75).copy()
 
                 # Pre-GRASP: track the live pickable so descent corrects for nudges.
                 # Post-GRASP: freeze xy so reading the pickable's pose (which now
                 # rides the arm) doesn't form a feedback loop dragging it out of the jaws.
                 pickable_for_plan = grasp_pickable_pos if grasp_pickable_pos is not None else pickable_now
-                waypoints = _plan(pickable_for_plan, target_now, lift_xy_ref, params, jitter)
+                waypoints = _plan(pickable_for_plan, target_now, lift_xy_ref, pre_hover_xy_ref, params, jitter)
 
                 wp_pos, gripper_open = waypoints[phase]
                 reached = _reached(tcp, wp_pos, phase, params)
@@ -231,7 +276,7 @@ def main(spec: dict[str, Any]) -> int:
 
                 if phase is not prev_phase or step % 20 == 0:
                     print(
-                        f"  ep{episode_idx:2d} t{step:3d} {phase.name:<7s} "
+                        f"  ep{episode_idx:2d} t{step:3d} {phase.name:<15s} "
                         f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
                         f"obj=[{pickable_now[0]:+.3f},{pickable_now[1]:+.3f},{pickable_now[2]:+.3f}] "
                         f"tgt=[{target_now[0]:+.3f},{target_now[1]:+.3f},{target_now[2]:+.3f}] "
@@ -377,10 +422,12 @@ def _plan(
     pickable_pos,
     target_pos,
     lift_xy_ref,
+    pre_hover_xy_ref,
     p: _OracleParams,
     j: _EpisodeJitter | None = None,
 ) -> dict:
     lift_xy = lift_xy_ref if lift_xy_ref is not None else pickable_pos[:2]
+    pre_hover_xy = pre_hover_xy_ref if pre_hover_xy_ref is not None else pickable_pos[:2]
     if j is None:
         hover_h = p.hover_height
         grasp_z = p.grasp_z_offset
@@ -396,13 +443,15 @@ def _plan(
         d_off_x, d_off_y = j.descend_xy_offset_x, j.descend_xy_offset_y
         m_off_x, m_off_y = j.move_xy_offset_x, j.move_xy_offset_y
     return {
-        Phase.HOVER:   (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + hover_h), True),
-        Phase.DESCEND: (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), True),
-        Phase.GRASP:   (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), False),
-        Phase.LIFT:    (_xyz(float(lift_xy[0]), float(lift_xy[1]), lift_h), False),
-        Phase.MOVE:    (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, lift_h), False),
-        Phase.PLACE:   (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), False),
-        Phase.RELEASE: (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), True),
+        Phase.PRE_HOVER:       (_xyz(float(pre_hover_xy[0]), float(pre_hover_xy[1]), pickable_pos[2] + hover_h), True),
+        Phase.HOVER:           (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + hover_h), True),
+        Phase.DESCEND_LATERAL: (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + hover_h), True),
+        Phase.DESCEND:         (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), True),
+        Phase.GRASP:           (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), False),
+        Phase.LIFT:            (_xyz(float(lift_xy[0]), float(lift_xy[1]), lift_h), False),
+        Phase.MOVE:            (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, lift_h), False),
+        Phase.PLACE:           (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), False),
+        Phase.RELEASE:         (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), True),
     }
 
 
@@ -431,7 +480,17 @@ def _sample_jitter(p: _OracleParams, rng) -> _EpisodeJitter:
 
 
 def _next_phase(phase: Phase) -> Phase:
-    order = [Phase.HOVER, Phase.DESCEND, Phase.GRASP, Phase.LIFT, Phase.MOVE, Phase.PLACE, Phase.RELEASE]
+    order = [
+        Phase.PRE_HOVER,
+        Phase.HOVER,
+        Phase.DESCEND_LATERAL,
+        Phase.DESCEND,
+        Phase.GRASP,
+        Phase.LIFT,
+        Phase.MOVE,
+        Phase.PLACE,
+        Phase.RELEASE,
+    ]
     i = order.index(phase)
     return order[min(i + 1, len(order) - 1)]
 
@@ -440,6 +499,19 @@ def _reached(tcp, wp_pos, phase: Phase, p: _OracleParams) -> bool:
     import numpy as np
     dxy = float(np.linalg.norm(tcp[:2] - wp_pos[:2]))
     dz = abs(float(tcp[2] - wp_pos[2]))
+    if phase in (Phase.MOVE, Phase.PLACE):
+        # MOVE/PLACE only require xy alignment. UR5 6-DOF DLS IK z-sinks
+        # at extended reach with the payload offset, so TCP typically
+        # arrives at the tray xy at z well below the commanded waypoint
+        # z (lift_height for MOVE, place height for PLACE) — demanding
+        # strict z would leave the phase permanently unreached. The
+        # kinematic_attach offset (~5 cm) puts the vial slightly below
+        # the TCP, so when MOVE/PLACE settles at low z above the tray
+        # the vial is already approximately above the tray surface;
+        # RELEASE then drops the vial a short distance onto the tray.
+        # Cap on the high side so the phase doesn't transition while
+        # still rising toward the target z early in the phase.
+        return dxy < p.xy_reach_tol and tcp[2] < wp_pos[2] + p.z_reach_tol
     z_tol = p.z_reach_tol_tight if phase in (Phase.DESCEND, Phase.PLACE) else p.z_reach_tol
     return dxy < p.xy_reach_tol and dz < z_tol
 

@@ -75,6 +75,15 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
 
     driver_joint = robot_cfg["gripper_driver_joint"]
     closed_threshold = float(robot_cfg["gripper_closed_threshold"])
+    # Separate, optionally-lower trigger for the kinematic_attach event.
+    # closed_threshold is used semantically for "the gripper has firmly
+    # closed on the payload" (grasp-success, place-open checks); the
+    # attach trigger should fire much earlier in the close cycle so the
+    # payload is rigidly snapped to the TCP before the closing fingers
+    # bump it sideways. Falls back to closed_threshold when not set.
+    attach_threshold = float(robot_cfg.get(
+        "gripper_kinematic_attach_threshold", closed_threshold,
+    ))
     tcp_z = float(robot_cfg["tcp_z_offset"])
     arm_joints: list[str] = list(robot_cfg["arm_joints"])
     ee_body: str = str(robot_cfg.get("ee_body", "tool0_aligned"))
@@ -158,7 +167,11 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                 "payload_cfg": SceneEntityCfg("pickable"),
                 "ee_frame_cfg": SceneEntityCfg("ee_frame"),
                 "driver_joint": driver_joint,
-                "closed_threshold": closed_threshold,
+                # Use the lower attach_threshold (typically ~1/4 of
+                # closed_threshold) so the payload is captured on the
+                # first physics sub-step of finger closure, before the
+                # closing fingers can knock the vial laterally.
+                "closed_threshold": attach_threshold,
                 "capture_distance": 0.10,
             },
         )
