@@ -5,16 +5,18 @@ selects the right Python environment (Isaac Lab's bundled python for sim
 work, the local training venv for ACT training) and forwards every flag
 through to the underlying module.
 
-| Script         | Environment | Wraps                          | Purpose                                      |
-|----------------|-------------|--------------------------------|----------------------------------------------|
-| `setup.sh`     | both        | —                              | Bootstrap: training venv, install, URDF→USD  |
-| `smoke.sh`     | Isaac Lab   | `arm_act.cli.smoke`            | Scene preview / sanity check                 |
-| `teleop.sh`    | Isaac Lab   | `arm_act.cli.teleop`           | Record keyboard demos                        |
-| `oracle.sh`    | Isaac Lab   | `arm_act.cli.oracle`           | Scripted oracle demo collection              |
-| `annotate.sh`  | Isaac Lab   | `arm_act.cli.annotate`         | Add ``datagen_info`` for mimic               |
-| `mimic.sh`     | Isaac Lab   | `arm_act.cli.mimic`            | Curobo-based augmentation                    |
-| `train.sh`     | training    | `arm_act.training.train_act`   | Train ACT                                    |
-| `eval.sh`      | Isaac Lab   | `arm_act.eval.rollout`         | Sim rollouts of a trained checkpoint         |
+| Script                 | Environment | Wraps                          | Purpose                                      |
+|------------------------|-------------|--------------------------------|----------------------------------------------|
+| `setup.sh`             | both        | —                              | Bootstrap: training venv, install, URDF→USD  |
+| `smoke.sh`             | Isaac Lab   | `arm_act.cli.smoke`            | Scene preview / sanity check                 |
+| `teleop.sh`            | Isaac Lab   | `arm_act.cli.teleop`           | Record keyboard demos                        |
+| `oracle.sh`            | Isaac Lab   | `arm_act.cli.oracle`           | Scripted oracle demo collection              |
+| `annotate.sh`          | Isaac Lab   | `arm_act.cli.annotate`         | Add ``datagen_info`` for mimic               |
+| `mimic.sh`             | Isaac Lab   | `arm_act.cli.mimic`            | Curobo-based augmentation                    |
+| `smolvla_convert.sh`   | training    | `arm_act.cli.smolvla_convert`  | hdf5 → LeRobotDataset conversion             |
+| `train.sh`             | training    | `lerobot-train`                | Default: SmolVLA fine-tune via LeRobot       |
+| `train_act.sh`         | training    | `arm_act.training.train_act`   | Legacy: vendored ACT training                |
+| `eval.sh`              | Isaac Lab   | `arm_act.eval.rollout`         | Sim rollouts of a trained ACT checkpoint     |
 
 ## Conventions
 

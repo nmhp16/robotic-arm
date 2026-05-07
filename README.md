@@ -64,15 +64,18 @@ concurrent imports `torch + torchvision` does at startup.
 ## Quickstart
 
 Default task is `pick_plant_out`. Pass `--task <name>` to retarget any
-step.
+step. The default trainer is **SmolVLA** (450 M params, fine-tuned via
+[LeRobot](https://github.com/huggingface/lerobot)); the legacy ACT
+trainer is one flag away — see "Training paths" below.
 
 ```bash
 ./scripts/smoke.sh                            # headless scene preview
-./scripts/oracle.sh   --num-demos 15          # collect 15 scripted demos
+./scripts/oracle.sh         --num-demos 15    # collect 15 scripted demos
 ./scripts/annotate.sh                         # add datagen_info for mimic
-./scripts/mimic.sh    --num-demos 500         # curobo augmentation
-./scripts/train.sh                            # train ACT (~30–60 min)
-./scripts/eval.sh                             # rollout eval, writes mp4s
+./scripts/mimic.sh          --num-demos 500   # curobo augmentation
+./scripts/smolvla_convert.sh                  # hdf5 -> LeRobotDataset
+./scripts/train.sh                            # fine-tune SmolVLA (LoRA)
+./scripts/eval.sh                             # rollout eval (ACT-only for now)
 ```
 
 Substitute `oracle.sh` with `teleop.sh` for keyboard collection. See
@@ -237,6 +240,61 @@ tests/
   `tasks/*.yaml` at import time, builds the env/mimic classes from each
   spec via the named template, and calls `gym.register` for both the env
   and its mimic variant.
+
+## Training paths
+
+This repo ships two parallel trainers. Pick whichever fits the use
+case; data collection (oracle / annotate / mimic) is shared between
+them.
+
+```bash
+# One-time setup (training venv on local NVMe, see ./scripts/setup.sh):
+source ~/arm-act-venv/bin/activate
+pip install -e ".[ml,smolvla]"
+```
+
+### `./scripts/train.sh` — SmolVLA via LeRobot (default)
+
+```bash
+./scripts/smolvla_convert.sh --task pick_vial_from_holder    # hdf5 -> LeRobotDataset
+./scripts/train.sh           --task pick_vial_from_holder    # LoRA fine-tune
+```
+
+- 450 M params (SmolVLA-base from `lerobot/smolvla_base`), LoRA
+  fine-tune in the training venv.
+- Language-conditioned via the YAML's `task.instruction` string —
+  every frame in the converted dataset gets it as the `task` column.
+- Pretrained on the LeRobot Hub corpus, so cross-slot / cross-object
+  generalization is much stronger than ACT-from-scratch.
+- The converted dataset lives under `data/lerobot/local/<task>/`
+  (a symlink to `~/lerobot_data/...` on local NVMe to keep big
+  videos off the FUSE mount).
+- Eval rollout in Isaac Lab isn't wired yet — for now use LeRobot's
+  own offline eval. Sim rollouts of a SmolVLA checkpoint inside
+  `eval/rollout.py` is a follow-up.
+
+### `./scripts/train_act.sh` — vendored ACT (~30 M params)
+
+```bash
+./scripts/train_act.sh --task pick_vial_from_holder
+```
+
+- Single task, no language. Trains in <1 h on a single GPU.
+- Reads the same `data/raw/<task>/demos.hdf5` (or the mimic-augmented
+  hdf5) that the SmolVLA converter consumes upstream.
+- Inference at ~30 Hz on small GPUs.
+- Eval rollout in Isaac Lab works (`./scripts/eval.sh`).
+- Use this when you want fast iteration / no language / no LeRobot
+  install / per-task highest BC quality.
+
+### When to pick which
+
+- **Pipeline learning, per-task best success rate**: train_act.sh.
+- **Cross-slot or cross-object generalization in one model**: train.sh
+  (SmolVLA).
+- **Both**: train ACT first to confirm the pipeline + dataset are
+  clean, then fine-tune SmolVLA on the same data for the harder
+  generalization questions.
 
 ## Scope
 

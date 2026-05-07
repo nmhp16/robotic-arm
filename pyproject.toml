@@ -43,6 +43,16 @@ ml = [
     "torchvision>=0.18",  # ResNet18 backbone for the ACT image encoder
 ]
 
+# Optional second training path via LeRobot — fine-tune SmolVLA, pi0, or
+# pi0-fast on the same demos used to train ACT. ACT remains the default;
+# this is an alternative for cross-task / cross-object generalization.
+# Install only when you actually want it (transformers + accelerate are
+# heavy). Install in the SAME local venv as the ACT trainer:
+#   pip install -e ".[smolvla]"
+smolvla = [
+    "lerobot>=0.5",
+]
+
 # Eval-side deps installed into Isaac Lab's python.
 sim = [
     "h5py>=3.10",
