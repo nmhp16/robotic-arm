@@ -70,8 +70,19 @@ fi
 
 # lerobot-train refuses to overwrite an existing non-empty output_dir; it
 # wants the dir to either not exist or contain a checkpoint to resume.
-# Don't pre-create here — let lerobot create it on first save.
-if [[ -d "$OUTPUT_DIR" ]] && [[ -n "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]]; then
+# Don't pre-create here — let lerobot create it on first save. Allow
+# the user to pass --resume=true through REMAINING_ARGS to continue a
+# previous run; in that case skip our existence check.
+_resume_requested=false
+for arg in "${REMAINING_ARGS[@]}"; do
+    if [[ "$arg" == "--resume=true" ]] || [[ "$arg" == "--resume" ]]; then
+        _resume_requested=true
+        break
+    fi
+done
+if [[ "$_resume_requested" == false ]] \
+    && [[ -d "$OUTPUT_DIR" ]] \
+    && [[ -n "$(ls -A "$OUTPUT_DIR" 2>/dev/null)" ]]; then
     echo "output dir $OUTPUT_DIR already has contents; rename/remove or pass --resume=true to continue a previous run." >&2
     exit 1
 fi
