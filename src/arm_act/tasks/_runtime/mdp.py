@@ -190,8 +190,15 @@ def kinematic_attach_payload(
             payload.write_root_velocity_to_sim(zero_vel, env_ids=ids)
             continue
         if is_closed[env_id] and near_tcp[env_id]:
-            # First contact close: capture current TCP→payload offset and lock.
-            env._kinematic_attach_offset[env_id] = payload_pos_w[env_id] - tcp_w[env_id]
+            # First contact close: capture TCP→payload offset and lock.
+            # Lateral (X/Y) is zeroed so the payload snaps to the TCP centerline
+            # — otherwise the descend-time XY jitter from the oracle gets frozen
+            # in for the rest of the episode, leaving the vial visibly off-axis
+            # and dropping it off-target during PLACE.
+            offset = payload_pos_w[env_id] - tcp_w[env_id]
+            offset[0] = 0.0
+            offset[1] = 0.0
+            env._kinematic_attach_offset[env_id] = offset
             env._kinematic_attach_active[env_id] = True
 
 

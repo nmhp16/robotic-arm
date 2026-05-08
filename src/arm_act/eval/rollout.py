@@ -36,6 +36,21 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=pathlib.Path, default=None)
     p.add_argument("--no-video", action="store_true")
     p.add_argument(
+        "--policy-type",
+        choices=("act", "smolvla"),
+        default="act",
+        help="act: load checkpoint directly (in-process). "
+        "smolvla: spawn a subprocess in arm-act-venv that hosts the lerobot policy "
+        "(needed because lerobot can't coexist with Isaac Lab in one venv).",
+    )
+    p.add_argument(
+        "--server-python",
+        type=pathlib.Path,
+        default=None,
+        help="Python interpreter used for --policy-type=smolvla. "
+        "Defaults to $ARM_ACT_VENV/bin/python or ~/arm-act-venv/bin/python.",
+    )
+    p.add_argument(
         "--action-horizon",
         type=int,
         default=None,
@@ -78,15 +93,31 @@ def main() -> int:
         import numpy as np
         import torch
 
-        from arm_act.training.act_policy import load_policy
-
         # Task gym registration is gated behind an explicit register() call so
         # it can be deferred until after AppLauncher init (env_cfg builders
         # need pxr from Omniverse). Importing the module alone is a no-op.
         import arm_act.tasks
         arm_act.tasks.register()
 
-        policy = load_policy(checkpoint, device="cuda")
+        if args.policy_type == "smolvla":
+            from arm_act.eval.remote_policy import RemotePolicy
+            import os
+            server_python = (
+                args.server_python
+                or pathlib.Path(os.environ.get("ARM_ACT_VENV", str(pathlib.Path.home() / "arm-act-venv"))) / "bin" / "python"
+            )
+            if not server_python.exists():
+                raise FileNotFoundError(f"server python not found: {server_python}")
+            policy = RemotePolicy(
+                checkpoint=checkpoint,
+                server_python=server_python,
+                task_instruction=task_cfg["instruction"],
+                # SmolVLA training used these two cams; matches the LeRobotDataset features.
+                camera_keys=["table_cam", "wrist_cam"],
+            )
+        else:
+            from arm_act.training.act_policy import load_policy
+            policy = load_policy(checkpoint, device="cuda")
         if action_horizon_override is not None:
             policy.action_horizon = action_horizon_override
         cam_keys = policy.model.camera_keys
@@ -215,6 +246,13 @@ def main() -> int:
             env.close()
         except (RuntimeError, AttributeError, AssertionError):
             logger.warning("env.close() raised during teardown (ignored)", exc_info=True)
+
+        # Reap the SmolVLA subprocess if we spawned one.
+        if hasattr(policy, "close"):
+            try:
+                policy.close()
+            except Exception:
+                logger.warning("policy.close() raised during teardown (ignored)", exc_info=True)
 
     except Exception:
         logger.exception("rollout failed")
