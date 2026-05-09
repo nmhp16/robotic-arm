@@ -42,10 +42,13 @@ robot:
     - wrist_3_joint
   ee_body: tool0_aligned
   ik_command_type: pose
-  tcp_z_offset: 0.143              # TCP sits 143mm beyond gripper_base origin,
-                                   # matches the AgiBot G1_omnipicker USD's
-                                   # gripper_l_center_joint (PhysicsFixedJoint
-                                   # localPos0=(0, 0, 0.14308) in base_link frame)
+  tcp_z_offset: 0.143              # TCP sits 143mm beyond tool0_aligned in
+                                   # tool0_aligned's local +Z direction. This
+                                   # is the calibrated grasp center for the
+                                   # simplified gripper kinematics. The MJCF
+                                   # source has gripper_l_center_link at a
+                                   # different position, but that's a control-
+                                   # reference frame, not the grip center.
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0              # joint at 0 = fingers fully open (53mm spread)
@@ -64,18 +67,13 @@ robot:
 # --- Scene objects ----------------------------------------------------------
 # The pickable is the wide_vial (mass 18g, ~25mm OD). It spawns at one
 # slot in the holder. To start with, the spawn is a small jitter window
-# around slot 2 (the third from the front, well inside the UR5 reach).
-# Future variant: randomize across all 6 slots — ALl six slot centers
-# in WORLD coords, with the holder placed at (0.5, 0.0, 0.0):
-#     world_y = -0.0856 + slot_y_local
-# slot_y_local from the STL analysis: 0.0145, 0.0430, 0.0715,
-#                                     0.1000, 0.1285, 0.1570 m
-#     -> world_y: -0.0711, -0.0426, -0.0141, 0.0144, 0.0429, 0.0714
-# all at world_x = 0.5 ± a couple mm, world_z = 0.18 (top of slot).
+# around slot 3 of the laid-down rack.
 #
-# The holder mesh has its corner at the URDF origin (not centered), so
-# placing the rack centered at world (0.5, 0.0) requires spawn xyz =
-# (0.475, -0.0856, 0.0). Done in the distractor block below.
+# After the URDF rewrite to MJCF-accurate dimensions (gripper extends
+# ~195mm from tool0 instead of 143mm), the workpieces were shifted +52mm
+# in +X so the wrist position required to grasp matches the prior
+# (working) configuration. UR5 joint angles in the oracle's reach
+# trajectories therefore stay in the same well-tested ranges.
 objects:
   vial:
     role: pickable
@@ -83,10 +81,8 @@ objects:
     usd_path: local:assets/wide_vial/wide_vial.usd
     scale: [1.0, 1.0, 1.0]
     spawn:
-      # Vial spawn is centered on slot 3 of the laid-down rack, with
-      # the vial bottom 1 cm above the rack top so it falls naturally
-      # into place under gravity. Slot 3 world Y = -0.0141; slot world
-      # X center = 0.5575 (rack origin 0.4187 + 0.1375).
+      # Vial centered on slot 3 of the laid-down rack. Slot Y = -0.0141.
+      # Slot X = rack_origin (0.4187) + 0.1375 = 0.5562.
       x: [0.555, 0.560]
       y: [-0.020, -0.008]
       z: [0.060, 0.060]
@@ -98,8 +94,6 @@ objects:
     scale: [3.0, 3.0, 0.2]
     kinematic: true
     spawn:
-      # Tray off to the +Y side of the holder, well clear of the rack
-      # but inside UR5's comfortable reach.
       x: [0.50, 0.55]
       y: [0.25, 0.32]
       z: [0.0103, 0.0103]
@@ -111,16 +105,6 @@ objects:
     kinematic: true
     collision: false
     spawn:
-      # Holder URDF now bakes pitch=-pi/2 so the rack lies flat with the
-      # 6 hole openings on its +Z face. Post-rotation footprint is
-      # 162.5 x 171.2 mm with 50.3 mm height. Origin is at the bottom-
-      # front-left corner, so to center the rack on (0.50, 0.0) the
-      # spawn xyz is (0.50 - 0.0813, 0.0 - 0.0856, 0).
-      #
-      # collision: false — the holder is a visual-only fixture. The
-      # convex_decomposition mesh on the slots is unreliable; we let
-      # the vial pass through the rack visually and rest at its spawn
-      # position. The kinematic_attach handles the grasp regardless.
       x: [0.4187, 0.4187]
       y: [-0.0856, -0.0856]
       z: [0.0, 0.0]
