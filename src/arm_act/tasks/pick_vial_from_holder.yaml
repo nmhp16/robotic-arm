@@ -63,6 +63,10 @@ robot:
   # ~0.005 m/sub-step so this fires in 1 sub-step.
   gripper_kinematic_attach_threshold: 0.003
   gripper_driver_joint: finger_left_joint
+  # Set False to require real friction-based grasping (sim-to-real-friendly
+  # demos); True keeps the kinematic_attach shortcut. Friction is set on
+  # the wide_vial.urdf and ur5_omnipicker.urdf via gazebo tags (μ=0.9).
+  use_kinematic_attach: false
 
 # --- Scene objects ----------------------------------------------------------
 # The pickable is the wide_vial (mass 18g, ~25mm OD). It spawns at one
@@ -156,14 +160,18 @@ oracle:
                                 # gives stable lift). TCP descends to z=0.075,
                                 # gripper fingertips ~7cm below TCP center.
   lift_height: 0.45             # well clear of the 16cm-tall holder
-  place_z_offset: 0.22          # vial bottom clears the tray pad with margin.
-                                # tray spawn z=0.0103 with scale_z=0.2 (block top
-                                # at ~z=0.015). vial half-height=0.035, gripper
-                                # tcp_z_offset=0.143. Solving for vial-bottom-
-                                # above-tray-by-1cm: tcp_z = 0.015 + 0.01 + 0.035
-                                # + 0.143 = 0.203 -> place_z_offset=0.193 minimum;
-                                # round up to 0.22 for clearance against the
-                                # 6-DOF IK overshoot we saw in MOVE phase.
+  place_z_offset: 0.10          # Empirically: vial centroid sits ~37mm below
+                                # TCP when gripper holds it (from oracle traces);
+                                # vial bottom is 72mm below TCP. With place_z
+                                # offset=0.10 -> TCP at tray_z + 0.10 = 0.115 ->
+                                # vial bottom at 0.115 - 0.072 = 0.043. Tray top
+                                # at 0.015 -> drop = 28mm. Small enough not to
+                                # bounce vial off-target. Was 0.22 before the
+                                # friction-grasp transition; with kinematic_attach
+                                # the vial was magically welded to TCP and drop
+                                # didn't matter, so a comfortable 22cm clearance
+                                # for IK overshoot was fine. Now we need gentle
+                                # release so the vial actually lands on the tray.
   max_dxy: 0.05
   max_dz: 0.05
   xy_reach_tol: 0.020

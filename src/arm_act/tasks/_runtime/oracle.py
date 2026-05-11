@@ -98,6 +98,13 @@ class _EpisodeJitter:
 class _OracleParams:
     hover_height: float
     grasp_z_offset: float
+    # Base XY offset applied to the descend / grasp positions on top of the
+    # pickable's centroid. Useful when the grip point is NOT the pickable's
+    # centroid — e.g., gripping the front-edge rim of a holder rack rather
+    # than its geometric center. Default 0,0 (grip directly above centroid).
+    # Distinct from the per-episode jitter ±1cm in OracleJitter.
+    grasp_xy_offset_x: float
+    grasp_xy_offset_y: float
     lift_height: float
     place_z_offset: float
     max_dxy: float
@@ -128,6 +135,8 @@ class _OracleParams:
         return cls(
             hover_height=float(o["hover_height"]),
             grasp_z_offset=float(o["grasp_z_offset"]),
+            grasp_xy_offset_x=float(o.get("grasp_xy_offset_x", 0.0)),
+            grasp_xy_offset_y=float(o.get("grasp_xy_offset_y", 0.0)),
             lift_height=float(o["lift_height"]),
             place_z_offset=float(o.get("place_z_offset", 0.0)),
             max_dxy=float(o["max_dxy"]),
@@ -428,6 +437,11 @@ def _plan(
 ) -> dict:
     lift_xy = lift_xy_ref if lift_xy_ref is not None else pickable_pos[:2]
     pre_hover_xy = pre_hover_xy_ref if pre_hover_xy_ref is not None else pickable_pos[:2]
+    # Base XY offset shifts the grip target away from the pickable's centroid
+    # — useful for objects gripped at an edge/feature rather than at center
+    # (e.g., the front-rim grip on a holder rack).
+    g_off_x = p.grasp_xy_offset_x
+    g_off_y = p.grasp_xy_offset_y
     if j is None:
         hover_h = p.hover_height
         grasp_z = p.grasp_z_offset
@@ -444,10 +458,10 @@ def _plan(
         m_off_x, m_off_y = j.move_xy_offset_x, j.move_xy_offset_y
     return {
         Phase.PRE_HOVER:       (_xyz(float(pre_hover_xy[0]), float(pre_hover_xy[1]), pickable_pos[2] + hover_h), True),
-        Phase.HOVER:           (_xyz(pickable_pos[0], pickable_pos[1], pickable_pos[2] + hover_h), True),
-        Phase.DESCEND_LATERAL: (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + hover_h), True),
-        Phase.DESCEND:         (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), True),
-        Phase.GRASP:           (_xyz(pickable_pos[0] + d_off_x, pickable_pos[1] + d_off_y, pickable_pos[2] + grasp_z), False),
+        Phase.HOVER:           (_xyz(pickable_pos[0] + g_off_x, pickable_pos[1] + g_off_y, pickable_pos[2] + hover_h), True),
+        Phase.DESCEND_LATERAL: (_xyz(pickable_pos[0] + g_off_x + d_off_x, pickable_pos[1] + g_off_y + d_off_y, pickable_pos[2] + hover_h), True),
+        Phase.DESCEND:         (_xyz(pickable_pos[0] + g_off_x + d_off_x, pickable_pos[1] + g_off_y + d_off_y, pickable_pos[2] + grasp_z), True),
+        Phase.GRASP:           (_xyz(pickable_pos[0] + g_off_x + d_off_x, pickable_pos[1] + g_off_y + d_off_y, pickable_pos[2] + grasp_z), False),
         Phase.LIFT:            (_xyz(float(lift_xy[0]), float(lift_xy[1]), lift_h), False),
         Phase.MOVE:            (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, lift_h), False),
         Phase.PLACE:           (_xyz(target_pos[0] + m_off_x, target_pos[1] + m_off_y, target_pos[2] + place_z), False),

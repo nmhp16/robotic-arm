@@ -1,0 +1,205 @@
+# Pick the HOLDER rack itself (not a vial in it) and move it to a delivery
+# position on the +Y side of the workspace.
+#
+# Same UR5 + AgiBot OmniPicker setup as pick_vial_from_holder. The
+# difference is we grip the holder's front rim (the outer wall at the
+# rack's -Y face), lift it, and place it at a delivery position. The
+# vial is still in the scene as a visual distractor (collision off so
+# the rack lifts cleanly without dragging it).
+#
+# To run:
+#   ./scripts/oracle.sh   --task pick_holder_and_move --num-demos 20
+#   ./scripts/smolvla_convert.sh --task pick_holder_and_move
+#   ./scripts/train.sh    --task pick_holder_and_move
+#
+# One-time USD conversion (Isaac Lab needed):
+#   ~/IsaacLab/_isaac_sim/python.sh scripts/convert_holder_pickable.py
+#   (in addition to the convert_ur5_omnipicker / convert_holder you ran
+#    for the vial-pick task)
+
+task:
+  name: pick_holder_and_move
+  instruction: pick up the holder rack and place it on the delivery pad
+  gym_id: Isaac-PickHolderAndMove-UR5-IK-Rel-v0
+  mimic_gym_id: Isaac-PickHolderAndMove-UR5-IK-Rel-Mimic-v0
+
+# --- Robot ------------------------------------------------------------------
+robot:
+  type: ur5_omnipicker
+  arm_joints:
+    - shoulder_pan_joint
+    - shoulder_lift_joint
+    - elbow_joint
+    - wrist_1_joint
+    - wrist_2_joint
+    - wrist_3_joint
+  ee_body: tool0_aligned
+  ik_command_type: pose
+  tcp_z_offset: 0.143
+  arm_joint_jitter_std: 0.02
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0
+  gripper_close_m: 0.024
+  gripper_closed_threshold: 0.012
+  gripper_kinematic_attach_threshold: 0.003
+  gripper_driver_joint: finger_left_joint
+  # Real friction-based grasping (sim-to-real-friendly).
+  use_kinematic_attach: false
+
+# --- Scene objects ----------------------------------------------------------
+# Pickable: the holder rack itself (free-floating rigid body via
+# convert_holder_pickable.py). 400g, 162.5x171.2x50.3mm. Centroid in
+# rack-local coords is (0.0813, 0.0856, 0.025) — i.e., the rack's spawn
+# pose offsets the centroid from the spawn-origin corner.
+#
+# Distractor: vial in slot 3 of the rack (visual only, collision off).
+#
+# Target: a delivery pad off to the +Y side of the workspace.
+objects:
+  holder:
+    role: pickable
+    type: usd
+    usd_path: local:assets/holder/holder_pickable.usd
+    spawn:
+      # Spawn the rack so its centroid is at world (0.50, 0.0). The rack's
+      # bottom-front-left corner (rack-frame origin) is at spawn xyz.
+      # corner = centroid - (0.0813, 0.0856, 0.025).
+      x: [0.4187, 0.4187]
+      y: [-0.0856, -0.0856]
+      z: [0.0, 0.0]
+      yaw: [0.0, 0.0]
+  vial:
+    role: distractor
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    kinematic: true
+    collision: false
+    spawn:
+      x: [0.555, 0.560]
+      y: [-0.020, -0.008]
+      z: [0.060, 0.060]
+      yaw: [-0.1, 0.1]
+  pad:
+    role: target
+    type: usd
+    usd_path: Props/Blocks/green_block.usd
+    scale: [4.0, 4.0, 0.2]              # bigger pad to fit the holder footprint (16x17 cm)
+    kinematic: true
+    spawn:
+      # Delivery pad off to the +Y side, ~30cm from rack center.
+      x: [0.50, 0.50]
+      y: [0.30, 0.30]
+      z: [0.0103, 0.0103]
+      yaw: [0.0, 0.0]
+
+# --- Cameras ----------------------------------------------------------------
+cameras:
+  table_cam:
+    pos: [1.4, 0.0, 1.0]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.18]
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+# --- Success + grasp-check terms -------------------------------------------
+# Success: holder centroid is over the delivery pad and gripper has
+# released. xy_threshold loose because the pad is 60cm across after scale.
+success:
+  type: object_on_target
+  object: holder
+  target: pad
+  xy_threshold: 0.10
+  height_threshold: 0.10
+grasp_check:
+  type: object_grasped
+  object: holder
+  diff_threshold: 0.10        # holder is much larger than the vial; allow looser TCP-pickable distance for "grasped"
+
+# --- Scripted oracle (state machine) ---------------------------------------
+# Holder is in the ORIGINAL orientation (slots face UP). The OmniPicker grips
+# the rack's LONG SIDE WALL EDGE — the same long edge the user circled, but
+# at the CENTER of the rack along Y (rack-local Y=0.0856) so the grip is
+# directly over the rack's center of mass. No lever arm = no tipping when
+# lifted.
+#
+# Why not at the end (Y=0.166): grip is 8cm offset from CoM. The 400g rack
+# rotates around the grip and the far end falls — no jaw can resist that
+# torque purely with friction at a point grip.
+#
+# Grip target in world: (0.424, 0.000, 0.045)
+#   - X=0.424: 5mm inside the rack's X=0 long side wall (outer face at world
+#              X=0.4187). Outer finger outside rack at X ~0.412, inner finger
+#              inside the rack at X ~0.436 (in the inter-slot region between
+#              slots 3 at Y=0.072 and slot 4 at Y=0.100).
+#   - Y=0.000: rack-local Y=0.0856 = world Y -0.086 + 0.086 = 0.000. Right
+#              over the rack's center of mass.
+#   - Z=0.045: TCP just below rack top, fingers in the upper portion of the
+#              long side wall.
+#
+# pickable_pos = rack base_link world position = (0.419, -0.086, 0).
+oracle:
+  hover_height: 0.30
+  grasp_z_offset: 0.045
+  grasp_xy_offset_x: 0.005              # rack-local X=0.005 (5mm in from the X=0
+                                        # long side wall outer face).
+  grasp_xy_offset_y: 0.0856             # rack-local Y=0.0856 = rack CENTER along Y.
+                                        # World Y=0.0 — directly over CoM.
+  lift_height: 0.45
+  place_z_offset: 0.10                  # place holder bottom ~3cm above pad top
+  max_dxy: 0.05
+  max_dz: 0.05
+  xy_reach_tol: 0.020
+  z_reach_tol: 0.015
+  z_reach_tol_tight: 0.008
+  grasp_hold_steps: 15
+  release_hold_steps: 5
+  max_steps_per_episode: 500
+  max_episode_attempts_per_demo: 5
+
+# --- Mimic augmentation ----------------------------------------------------
+mimic:
+  name: pick_holder_and_move_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: holder
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the holder by its front rim
+      next_description: Move the holder to the delivery pad
+    - object: pad
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Move the holder to the delivery pad
+
+# --- Data paths + checkpoint locations -------------------------------------
+data:
+  raw_path: data/raw/pick_holder_and_move/demos.hdf5
+  annotated_path: data/annotated/pick_holder_and_move/demos.hdf5
+  augmented_path: data/augmented/pick_holder_and_move/demos.hdf5
+  hdf5_path: data/raw/pick_holder_and_move/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_holder_and_move
+
+eval:
+  checkpoint: checkpoints/pick_holder_and_move/smolvla/checkpoints/last/pretrained_model
+  num_episodes: 5
+  max_steps_per_episode: 300
+  output_dir: eval/runs/pick_holder_and_move
+  record_video: true
+  action_horizon: null

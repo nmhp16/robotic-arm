@@ -84,6 +84,13 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     attach_threshold = float(robot_cfg.get(
         "gripper_kinematic_attach_threshold", closed_threshold,
     ))
+    # use_kinematic_attach: when True (default), the kinematic_attach event
+    # term welds the vial to the TCP on grasp — pipeline shortcut that
+    # bypasses friction physics for replayable demos but blocks sim-to-real.
+    # Set False in the task YAML to require real friction-based grasping;
+    # the trade-off is the oracle must learn to maintain grip via contact
+    # and the demos become physics-realistic (closer to real robot behavior).
+    use_kinematic_attach = bool(robot_cfg.get("use_kinematic_attach", True))
     tcp_z = float(robot_cfg["tcp_z_offset"])
     arm_joints: list[str] = list(robot_cfg["arm_joints"])
     ee_body: str = str(robot_cfg.get("ee_body", "tool0_aligned"))
@@ -158,23 +165,27 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         # See ``mdp.kinematic_attach_payload`` for the rationale — bypasses
         # GPU-PhysX friction non-determinism by snapping the payload to the
         # gripper while the jaws are closed.
-        kinematic_attach = EventTerm(
-            func=mdp.kinematic_attach_payload,
-            mode="interval",
-            interval_range_s=(0.0, 0.0),
-            is_global_time=False,
-            params={
-                "payload_cfg": SceneEntityCfg("pickable"),
-                "ee_frame_cfg": SceneEntityCfg("ee_frame"),
-                "driver_joint": driver_joint,
-                # Use the lower attach_threshold (typically ~1/4 of
-                # closed_threshold) so the payload is captured on the
-                # first physics sub-step of finger closure, before the
-                # closing fingers can knock the vial laterally.
-                "closed_threshold": attach_threshold,
-                "capture_distance": 0.10,
-            },
-        )
+        # Conditional: when robot_cfg["use_kinematic_attach"] is False, the
+        # event is omitted and the policy must learn real friction-based
+        # grasping. Set False in the task YAML for sim-to-real-friendly demos.
+        if use_kinematic_attach:
+            kinematic_attach = EventTerm(
+                func=mdp.kinematic_attach_payload,
+                mode="interval",
+                interval_range_s=(0.0, 0.0),
+                is_global_time=False,
+                params={
+                    "payload_cfg": SceneEntityCfg("pickable"),
+                    "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+                    "driver_joint": driver_joint,
+                    # Use the lower attach_threshold (typically ~1/4 of
+                    # closed_threshold) so the payload is captured on the
+                    # first physics sub-step of finger closure, before the
+                    # closing fingers can knock the vial laterally.
+                    "closed_threshold": attach_threshold,
+                    "capture_distance": 0.10,
+                },
+            )
 
     env_cfg.events = _Events()
 

@@ -269,10 +269,18 @@ def _ur5_omnipicker() -> ArticulationCfg:
             # could capture it.
             "gripper": ImplicitActuatorCfg(
                 joint_names_expr=["finger_.*_joint"],
-                effort_limit_sim=200.0,
+                # Increased from (eff=200, k=4000) to support 400g holder
+                # rack grasp via friction-only contact. The grip force
+                # equation is roughly stiffness × (target − actual). At
+                # k=12000 with the gripper hitting a hard stop ~3mm before
+                # the closed target, normal force ≈ 36N per finger; with
+                # μ=0.9 that yields friction ≈ 32N, ample for the 4N
+                # weight of the rack. The vial-pick task (18g vial)
+                # doesn't notice the change.
+                effort_limit_sim=500.0,
                 velocity_limit_sim=0.1,
-                stiffness=4000.0,
-                damping=80.0,
+                stiffness=12000.0,
+                damping=120.0,
                 friction=0.0,
                 armature=0.0,
             ),

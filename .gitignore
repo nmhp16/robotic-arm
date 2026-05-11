@@ -56,3 +56,5 @@ Thumbs.db
 # Generated demo videos (large binaries; regenerate via oracle.sh /
 # smoke.sh with --video-out).
 /docs/videos/
+
+*.png
