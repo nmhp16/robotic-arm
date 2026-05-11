@@ -32,7 +32,8 @@ robot:
   type: t3_401_tweezer
   arm_joints: [joint_1, joint_2, joint_3, joint_4]
   ee_body: tool0_aligned
-  tcp_z_offset: 0.095
+  tcp_z_offset: 0.05                          # 50 mm short tweezer (see
+                                              # t3_401_tweezer.urdf for why)
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0
@@ -130,13 +131,13 @@ grasp_check:
 # success when LIFT reaches lift_height. The tray is vestigial (kept for
 # YAML schema reasons) and never visited.
 oracle:
-  hover_height: 0.15                          # tcp at plant.z + 0.15 = ~0.19 (mid-range)
-  grasp_z_offset: 0.025                       # tcp at plant.z + 0.025 = ~0.065 = inside upper
-                                              # stem (TCP min z is 0.065 due to J3 limits;
-                                              # any lower target gets clamped and the tips
-                                              # end up at the very top edge of the cylinder
-                                              # collision, missing the stem entirely)
-  lift_height: 0.22                           # near max retract; clears the vial top
+  hover_height: 0.13                          # tcp at plant.z + 0.13 = ~0.17 (near
+                                              # max TCP reach 0.18 for real-height
+                                              # T3-401S + 50 mm tweezer)
+  grasp_z_offset: 0.025                       # tcp at plant.z + 0.025 = ~0.07
+                                              # inside upper stem; well within
+                                              # TCP range [0.03, 0.18]
+  lift_height: 0.18                           # max retract; clears the vial top
   place_z_offset: 0.0
   max_dxy: 0.04
   max_dz: 0.05

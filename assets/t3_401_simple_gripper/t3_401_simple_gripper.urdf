@@ -20,11 +20,11 @@
 
   <link name="base_link">
     <visual>
-      <!-- CAD mesh: assembly is Y-up, arm extends in -X. rpy=(pi/2, 0, pi)
-           remaps Y_cad -> Z_urdf and flips X. The CAD column is 437 mm tall
-           but joint_1 sits at z=0.50 per the original spec, so a primitive
-           filler caps the column up to the joint plane (see second visual). -->
-      <origin xyz="0 0 0" rpy="1.5707963 0 3.1415927"/>
+      <!-- T3-401S column+electronics-housing mesh. Joint_1 axis at
+           CAD (189, 200, 0). With kinematic joint_1 now at z=0.37
+           (real T3-401S column height), translate by
+           xyz=(-0.189, 0, 0.17). See t3_401_tweezer.urdf. -->
+      <origin xyz="-0.189 0 0.17" rpy="1.5707963 0 0"/>
       <geometry>
         <mesh filename="meshes/base_link.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -33,11 +33,11 @@
       </material>
     </visual>
     <visual>
-      <!-- Filler hub: bridges the 63 mm gap between the CAD column top
-           (z=0.437) and the kinematic joint_1 plane (z=0.500). -->
-      <origin xyz="0 0 0.4685" rpy="0 0 0"/>
+      <!-- 17 cm mounting block bridges floor to the CAD column base
+           at z=0.17. See t3_401_tweezer.urdf for reasoning. -->
+      <origin xyz="-0.108 0 0.085" rpy="0 0 0"/>
       <geometry>
-        <cylinder length="0.063" radius="0.05"/>
+        <cylinder length="0.17" radius="0.10"/>
       </geometry>
       <material name="silver"/>
     </visual>
@@ -62,11 +62,11 @@
   <!-- Joint 1: shoulder rotation about vertical at top of base column -->
   <link name="link_1">
     <visual>
-      <!-- joint_1 axis sits at CAD (0, 0.18, 0). After rpy=(pi/2,0,pi)
-           rotation that maps to URDF (0, 0, 0.18); translate by -0.18 in z
-           to land it at the link origin. Arm body then extends +X as URDF
-           expects. Collision keeps the primitive box for PhysX stability. -->
-      <origin xyz="0 0 -0.18" rpy="1.5707963 0 3.1415927"/>
+      <!-- T3-401S arm1 mesh: spans CAD X=101..414, Y=182..235. Joint_1
+           at CAD (189, 182, 0). rpy=(pi/2,0,0) keeps URDF-X = CAD-X;
+           translate by (-0.189, 0, -0.182) so joint_1 lands at link
+           origin and arm extends in URDF +X toward joint_2 at +0.225. -->
+      <origin xyz="-0.189 0 -0.182" rpy="1.5707963 0 0"/>
       <geometry>
         <mesh filename="meshes/link_1.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -89,7 +89,7 @@
   <joint name="joint_1" type="revolute">
     <parent link="base_link"/>
     <child link="link_1"/>
-    <origin xyz="0 0 0.50" rpy="0 0 0"/>
+    <origin xyz="0 0 0.37" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
     <limit lower="-2.303" upper="2.303" effort="80.0" velocity="6.5"/>
     <dynamics damping="2.0" friction="0.2"/>
@@ -98,12 +98,11 @@
   <!-- Joint 2: elbow rotation at end of arm 1 -->
   <link name="link_2">
     <visual>
-      <!-- joint_2 axis at CAD (-0.225, 0.20, 0); maps to URDF (0.225, 0, 0.20)
-           after rpy=(pi/2,0,pi); translate by (-0.225, 0, -0.20) to bring it
-           to the link origin. The A2 housing extends ~23 cm above joint_2
-           which gives the elbow servo + Z-motor housing the right vertical
-           silhouette. -->
-      <origin xyz="-0.225 0 -0.20" rpy="1.5707963 0 3.1415927"/>
+      <!-- T3-401S arm2 mesh: spans CAD X=292..591, Y=204..425. Joint_2
+           at CAD (414, 204, 0). rpy=(pi/2,0,0); translate by
+           (-0.414, 0, -0.204). The Z-motor tower extends ~22 cm above
+           joint_2 in CAD. -->
+      <origin xyz="-0.414 0 -0.204" rpy="1.5707963 0 0"/>
       <geometry>
         <mesh filename="meshes/link_2.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -137,12 +136,12 @@
        origin, so as J3 increases the wrist (joint_4) descends. -->
   <link name="link_3">
     <visual>
-      <!-- The shaft mesh has been trimmed to its bottom 100 mm (CAD y=0.16
-           to 0.26) by convert_step_to_meshes.py so it matches the URDF's
-           joint_3 -> joint_4 spacing. Top of trimmed mesh is CAD y=0.26;
-           rpy=(pi/2,0,pi) plus xyz=(-0.40, 0, -0.26) puts that at the link
-           origin, with the bottom at z=-0.10 where joint_4 attaches. -->
-      <origin xyz="-0.40 0 -0.26" rpy="1.5707963 0 3.1415927"/>
+      <!-- T3-401S shaft mesh trimmed to bottom 100 mm. Shaft centered at
+           CAD (X=543, Z=23) — note the Z=23 off-center offset. Joint_3
+           axis = shaft cylinder axis. Translate by (-0.543, 0.023,
+           -0.261) so shaft axis aligns with link_3 origin (the
+           kinematic joint_3). See t3_401_tweezer.urdf for details. -->
+      <origin xyz="-0.543 0.023 -0.261" rpy="1.5707963 0 0"/>
       <geometry>
         <mesh filename="meshes/link_3.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -165,9 +164,11 @@
   <joint name="joint_3" type="prismatic">
     <parent link="link_2"/>
     <child link="link_3"/>
-    <origin xyz="0.175 0 0" rpy="0 0 0"/>
+    <!-- joint_3 origin from T3-401S CAD (planar SCARA at same Z as
+         joint_2; see t3_401_tweezer.urdf for derivation). -->
+    <origin xyz="0.129 -0.023 0" rpy="0 0 0"/>
     <axis xyz="0 0 -1"/>
-    <limit lower="0.0" upper="0.200" effort="120.0" velocity="1.0"/>
+    <limit lower="0.0" upper="0.150" effort="120.0" velocity="1.0"/>
     <dynamics damping="3.0" friction="0.5"/>
   </joint>
 

@@ -39,11 +39,11 @@ MESH_DIR = os.path.join(REPO_ROOT, "assets", "t3_401_simple_gripper", "meshes")
 # Map STEP product names to URDF link names. Anything not in this map is
 # either an assembly wrapper or a non-kinematic decoration we skip.
 PART_TO_LINK: Dict[str, str] = {
-    "_T3-B401S_B": "base_link",
-    "_T3-B401S_A1": "link_1",
-    "_T3-B401S_A2": "link_2",
-    "_T3-B401S_SHAFT": "link_3",
-    "_T3-B401S_CABLE": "cable",  # cosmetic; URDF can ignore
+    "T3-401S_base": "base_link",
+    "T3-401S_arm1": "link_1",
+    "T3-401S_arm2": "link_2",
+    "T3-401S_shaft": "link_3",
+    "T3-401S_cable": "cable",  # cosmetic; URDF can ignore
 }
 
 # STEP units are millimetres; URDF/USD use metres.

@@ -1,16 +1,25 @@
-# Put the plant BACK into the jar. Phase 2 of the two-phase task.
+# Put the plant BACK into the vial. Mirror of pick_plant_out_of_vial.
 #
-# Uses the _runtime_jar template (sibling of _runtime) which extends
-# the standard archetype with an INSERT phase for descending below the
-# target's z (into the jar cavity) and a RETRACT phase that lifts the
-# gripper out of the jar before the episode ends. This is essential
-# because the default _runtime's RELEASE just opens the gripper and the
-# episode terminates with the arm still inside the jar -- mimic
-# augmentation then learns trajectories that get stuck.
+# Plant starts on a small tray off to the +y side; the vial is the target.
+# T3-401 SCARA with a midshaft-held tweezer descends into the vial mouth
+# and releases the plant. Uses the _runtime_jar template:
 #
-# State machine (see _runtime_jar/oracle.py):
 #   HOVER -> DESCEND -> GRASP -> LIFT -> MOVE -> ALIGN -> INSERT
 #         -> RELEASE -> RETRACT
+#
+# Tweezer is the SAME end-effector as the pick side, with the same gripper
+# stroke (0 -> 5 mm) and the same midshaft mounting. The action space
+# stays 4-D: [dx, dy, dz, gripper] where gripper is binary (+1 open /
+# -1 close) and drives both finger prismatic joints together via the
+# `BinaryJointPositionActionCfg`. The fingers' high stiffness (8000
+# N/m, see robot_cfg._t3_401_tweezer) keeps the plant clamped during
+# the lift+move and the kinematic_attach event term welds the plant to
+# the TCP during GRASP so the lift is robust under PhysX jitter.
+#
+# Vial collision is disabled (cosmetic), same trick as the pick side:
+# after RELEASE the plant settles on the TABLE inside the vial visual.
+# The `object_on_target` success term checks plant centroid vs vial
+# centroid xy + height — no real cavity interaction needed.
 #
 # To run:
 #   ./scripts/oracle.sh   --task put_plant_back --num-demos 15
@@ -18,79 +27,112 @@
 #   ./scripts/mimic.sh    --task put_plant_back --num-demos 500
 #   ./scripts/train.sh    --task put_plant_back
 #   ./scripts/eval.sh     --task put_plant_back
-#
-# Tip: scripted oracle for insertion is brittle (one bad waypoint = stuck
-# in jar wall). If oracle.sh succeeds <50% of the time, switch to keyboard
-# teleop for demo collection: ./scripts/teleop.sh --task put_plant_back
 
-# Use the orientation-aware insertion template.
+# Use the orientation-aware insertion template (adds ALIGN/INSERT/RETRACT
+# phases on top of the default HOVER->...->LIFT->MOVE->PLACE->RELEASE).
 template: _runtime_jar
 
 task:
   name: put_plant_back
-  instruction: pick the plant from the tray and place it back inside the jar
+  instruction: pick the plant off the tray and put it back into the vial
   gym_id: Isaac-PutPlantBack-T3-IK-Rel-v0
   mimic_gym_id: Isaac-PutPlantBack-T3-IK-Rel-Mimic-v0
 
 # --- Robot ------------------------------------------------------------------
+# Tweezer mounted at MIDSHAFT to gripper_base (5 mm clamp body); tips
+# extend ~95 mm below tool0_aligned -> tcp_z_offset = 0.095. Gripper
+# stroke is 0 -> 5 mm per finger (10 mm tip gap when open). Stem
+# diameter ~3 mm so a fully-closed tweezer clamps the stem solidly.
 robot:
-  type: t3_401_simple_gripper
+  type: t3_401_tweezer
   arm_joints: [joint_1, joint_2, joint_3, joint_4]
   ee_body: tool0_aligned
-  tcp_z_offset: 0.08
+  tcp_z_offset: 0.05                         # 50 mm short-precision tweezer
+                                             # (down from 95 mm) so the real-
+                                             # height robot (joint_1=0.37,
+                                             # J3=0.15) can reach hover/lift
+                                             # heights of ~0.18 m above table
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0
-  gripper_close_m: 0.04
-  gripper_closed_threshold: 0.02
+  gripper_close_m: 0.005
+  gripper_closed_threshold: 0.0025
   gripper_driver_joint: finger_left_joint
+  # Default kinematic_attach (on): the plant is welded to the TCP when
+  # the gripper closes. We tried real friction grip (use_kinematic_attach
+  # false), but the leaf_plant's rigid leaves at z=0.105..0.12 are
+  # ~5 cm wide and the tweezer's 9 cm-long finger collision crushed
+  # them on close, tipping the plant off the tray. Kinematic_attach
+  # sidesteps this by bypassing contact physics during the held phase
+  # — visually identical (fingers do close), demos are reliable. To
+  # revisit real grip, the leaf_plant USD would need flexible leaves
+  # or much narrower stem-only geometry.
 
 # --- Scene objects ----------------------------------------------------------
-# The plant starts on the tray (off to +y); the jar is the target (in
-# front of the arm, kinematic so it doesn't fall over when the gripper
-# brushes it). The "target" pose is the jar's body; the oracle treats
-# target.z + insert_z_offset (negative) as the release point inside the
-# cavity.
-#
-# Spawn ranges are constrained to T3-401's 400mm reach envelope.
+# plant: leaf_plant USD. Spawns above a kinematic "tray" pad — gives it
+#   a known landing surface at z=0.04 regardless of where the SeattleLab
+#   table's actual flat region lies. (The table USD's surface height
+#   varies across xy and even drops below z=0 in some areas, so relying
+#   on it for spawn z is fragile.) After settling, plant.z = 0.04.
+# vial: wide_vial USD as the target. collision: false in YAML, but the
+#   wide_vial USD's baked convex_decomposition collision still fires —
+#   confirmed by the pick_plant_out_of_vial demos where a plant lands
+#   on the (collision-disabled) vial at z=0.039. We exploit that: after
+#   RELEASE the plant drops onto the vial collision and settles inside
+#   the vial visual at z~0.039 (= vial.z + 0.004, well within the
+#   success height window of +/- 0.02).
+# tray: kinematic cuboid under the plant spawn xy. 4 cm tall so plant
+#   lands at z=0.04 (TCP can reach 0.04 + 0.025 = 0.065 = SCARA J3 min).
 objects:
   plant:
     role: pickable
+    type: usd
+    usd_path: local:assets/leaf_plant/leaf_plant.usd
+    scale: [1.0, 1.0, 1.0]
+    friction:                                # high friction; tweezer relies
+      static: 3.0                            # on stiffness*error to clamp,
+      dynamic: 2.5                           # and high friction prevents the
+      restitution: 0.0                       # stem from slipping during lift
+    spawn:
+      x: [0.30, 0.32]                        # plant spawn xy directly above
+      y: [0.10, 0.12]                        # the tray pad (offset +y from
+                                             # vial xy by ~13 cm so MOVE actually
+                                             # traverses)
+      z: [0.10, 0.10]                        # 6 cm above tray top; settles
+                                             # at root_pos z ~= 0.04
+      yaw: [-0.2, 0.2]
+  vial:
+    role: target
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    kinematic: true
+    collision: false                         # YAML setting; the baked USD
+                                             # collision still fires and catches
+                                             # the plant at z=0.039 (verified
+                                             # from existing pick demos)
+    spawn:
+      x: [0.30, 0.32]                        # same xy band as pick task; vial
+      y: [-0.02, 0.00]                       # collision lands plant near the
+                                             # rim (z=0.039 = vial.z + 0.004)
+      z: [0.035, 0.035]                      # matches pick_plant_out_of_vial
+      yaw: [0.0, 0.0]
+  tray:
+    role: distractor
     type: cuboid
-    size: [0.02, 0.02, 0.15]
-    mass: 0.05
-    color: [0.35, 0.20, 0.08]
+    size: [0.10, 0.10, 0.04]                 # 10x10x4 cm landing pad
+    mass: 0.5
+    color: [0.55, 0.45, 0.30]
+    kinematic: true                          # tray doesn't move; gripper can
+                                             # brush it without budging
     friction:
-      static: 2.0
-      dynamic: 1.8
+      static: 1.0
+      dynamic: 0.8
       restitution: 0.0
     spawn:
-      x: [0.24, 0.28]
-      y: [0.16, 0.22]               # plant starts on the tray (matches
-                                    # pick_plant_out's tray spawn)
-      z: [0.075, 0.075]             # standing up on the tray
-      yaw: [-0.3, 0.3]
-  jar:
-    role: target
-    # Use a hollow cylindrical prop. Swap the usd_path to whatever jar
-    # asset you have available under ISAAC_NUCLEUS_DIR. If you don't have
-    # one, the closest approximation in the standard nucleus is a thin
-    # green block (Props/Blocks/green_block.usd) -- the policy will still
-    # learn the descent but the visual won't look like a jar.
-    # Without a hollow-jar USD, the bundled green_block stands in as a
-    # solid pedestal. The oracle places the plant on the pedestal's top
-    # surface rather than dropping it into a cavity; the state machine
-    # is otherwise identical to the insertion case (HOVER -> ... -> ALIGN
-    # -> INSERT -> RELEASE -> RETRACT). Swap in a hollow jar USD here
-    # and lower `insert_z_offset` to descend into the cavity.
-    type: usd
-    usd_path: Props/Blocks/green_block.usd
-    scale: [3.0, 3.0, 4.0]                     # ~6cm wide, ~8cm tall pedestal
-    kinematic: true
-    spawn:
-      x: [0.28, 0.32]
-      y: [-0.04, 0.04]
-      z: [0.04, 0.04]               # pedestal centroid at z=0.04 -> top at z=0.08
+      x: [0.31, 0.31]                        # centered under plant spawn xy
+      y: [0.11, 0.11]
+      z: [0.02, 0.02]                        # centroid z=0.02 -> top at z=0.04
       yaw: [0.0, 0.0]
 
 # --- Cameras ----------------------------------------------------------------
@@ -108,65 +150,84 @@ cameras:
     focal_length: 14.0
     horizontal_aperture: 20.955
     clipping_range: [0.01, 2.0]
-    depth: true                     # wrist depth is critical for jar alignment
+    depth: true                              # wrist depth helps the policy
+                                             # align over the narrow vial mouth
 
 # --- Success + grasp-check terms -------------------------------------------
-# Success here means the plant is INSIDE the jar (xy aligned, z below jar
-# top by at least the height_threshold) AND the gripper is open.
-#
-# We reuse object_on_target with a tight xy_threshold (jar opening is
-# narrow) and height_threshold interpreted as "how far below target.z the
-# plant must be to count as inserted".
+# Plant counts as inserted when its centroid is within 25 mm xy of the
+# vial centroid AND within 100 mm vertically. Loose vertical because the
+# plant rests on the table (z~0.06) while the vial centroid is at z=0.035
+# — the height_threshold mainly guards against "released 30 cm above".
 success:
   type: object_on_target
   object: plant
-  target: jar
-  xy_threshold: 0.04                # plant settles on top of the pedestal;
-                                    # tolerate ~4cm xy offset (pedestal is
-                                    # 6cm wide so plant base is contained)
-  height_threshold: 0.15            # plant centroid ~12cm above pedestal
-                                    # centroid when standing on top
+  target: vial
+  xy_threshold: 0.025
+  height_threshold: 0.10
 grasp_check:
   type: object_grasped
   object: plant
-  diff_threshold: 0.06
+  diff_threshold: 0.04
 
 # --- Scripted oracle (state machine extended for insertion) ----------------
-# Knobs added by _runtime_jar:
-#   align_xy_tol      -- tighter xy tolerance for ALIGN phase (jar mouth)
-#   insert_z_offset   -- NEGATIVE: distance below target.z at release point
-#   retract_height    -- z to lift back up to after release (clear of jar)
+# Heights are absolute world-z values. Reachable TCP range for the SCARA
+# + midshaft-held tweezer is z=0.065 (J3 full extension) to z=0.265 (J3
+# fully retracted). All hover/lift/insert/retract points live in that
+# band.
+#
+# Frames-of-reference cheat sheet (observed from existing pick demos):
+#   plant.z (root_pos) settles to ~0.039 — origin at plant base, sitting
+#     on the SeattleLabTable top surface
+#   vial.z (root_pos) = 0.035 — spawn matches pick task; vial mesh
+#     extends from vial.z to vial.z + 0.07 (rim at z = 0.105)
+#   GRASP capture offset (plant.z - TCP.z) ≈ 0.039 - 0.064 = -0.025
+#     once kinematic_attach welds the plant to the TCP
+#
+# INSERT geometry: TCP at vial.z + insert_z_offset = 0.035 + 0.08 =
+# 0.115. Tweezer tip at z=0.115, which is 10 mm above the vial rim
+# (z=0.105) — the tips clear the rim cleanly during retract. Plant
+# follows TCP at -0.025 z offset, so plant base at z=0.090 = 15 mm
+# inside the vial cavity. After RELEASE the plant falls back to the
+# table (z=0.039) right at the vial xy — success terms trigger.
 oracle:
-  hover_height: 0.20                # 20cm above plant centroid -> tcp at z=0.275
-                                    # (tray plant starts at z=0.075)
-  grasp_z_offset: 0.06              # grasp 6cm above plant centroid (= same
-                                    # graspable point as in pick_plant_out)
-  lift_height: 0.26                 # matches pick_plant_out
-  place_z_offset: 0.04              # not used by _runtime_jar but kept for
-                                    # default template compatibility
-  insert_z_offset: 0.20             # tcp target = jar.z + 0.20 = 0.240;
-                                    # release the plant ~3cm above the
-                                    # pedestal top and let it drop. With
-                                    # the SCARA's pose-IK we get a clean
-                                    # 3cm descent from lift to release;
-                                    # deeper descents stall the DLS solver.
-  align_xy_tol: 0.015               # xy alignment before descending; loose
-                                    # enough to tolerate residual swing of
-                                    # the long plant in the gripper
-  retract_height: 0.26              # lift back up clear of pedestal after
-                                    # release
-  max_dxy: 0.05                     # matches pick_plant_out; the slower
-                                    # variant ran into IK descent stalls
+  hover_height: 0.13                         # tcp at plant.z + 0.13 = ~0.17 (just
+                                             # below max TCP reach of 0.18 with
+                                             # the shorter 50 mm tweezer + real
+                                             # robot height joint_1=0.37)
+  grasp_z_offset: 0.025                      # tcp at plant.z + 0.025 = ~0.065
+                                             # inside the upper stem
+  lift_height: 0.18                          # near max retract (TCP_max=0.18 with
+                                             # the new shorter tweezer); clears
+                                             # the vial rim at z=0.105
+  place_z_offset: 0.04                       # unused by _runtime_jar; kept for
+                                             # default-template compatibility
+  insert_z_offset: 0.08                      # tcp at vial.z + 0.08 = 0.115 ->
+                                             # tweezer tip 1 cm above vial rim
+                                             # (rim at z=0.105). With grip
+                                             # offset -0.025 the plant base
+                                             # rides at z=0.090 (inside cavity)
+  align_xy_tol: 0.012                        # tight xy alignment before descent
+                                             # (vial mouth is 27 mm wide; 12 mm
+                                             # tolerance keeps the stem centered)
+  retract_height: 0.18                       # lift back up clear of vial after
+                                             # release; matches lift_height
+  max_dxy: 0.05
   max_dz: 0.05
-  xy_reach_tol: 0.020
+  xy_reach_tol: 0.004                        # tight xy tolerance: stem is 3 mm
+                                             # dia, tweezer must align to within
+                                             # ~stem radius (1.5 mm) for the
+                                             # fingers to actually pinch (no
+                                             # kinematic_attach now, real grip).
+                                             # Matches pick_plant_out_of_vial.
   z_reach_tol: 0.015
-  z_reach_tol_tight: 0.015          # the SCARA's pose-IK descents stall
-                                    # near a few mm of the target; 0.008
-                                    # would reach indefinitely
-  grasp_hold_steps: 15
-  release_hold_steps: 8             # hold a bit longer; plant settles on
-                                    # the pedestal before retract
-  max_steps_per_episode: 600        # slower max_dxy => more steps per demo
+  z_reach_tol_tight: 0.015                   # SCARA's pose-IK descents stall
+                                             # within a few mm of the target;
+                                             # 0.012 was reaching at GRASP but
+                                             # 0.015 gives more slack for INSERT
+  grasp_hold_steps: 18                       # hold close before lifting
+  release_hold_steps: 8                      # let plant settle in vial before
+                                             # retract
+  max_steps_per_episode: 600
   max_episode_attempts_per_demo: 5
 
 # --- Mimic augmentation ----------------------------------------------------
@@ -182,13 +243,13 @@ mimic:
       action_noise: 0.03
       num_interpolation_steps: 5
       description: Grasp the plant on the tray
-      next_description: Insert the plant into the jar
-    - object: jar
+      next_description: Put the plant back into the vial
+    - object: vial
       signal: null
       offset_range: [0, 0]
       action_noise: 0.03
       num_interpolation_steps: 5
-      description: Insert the plant into the jar
+      description: Put the plant back into the vial
 
 # --- Data paths + checkpoint locations -------------------------------------
 data:
