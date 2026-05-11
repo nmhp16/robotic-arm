@@ -164,11 +164,12 @@
   <joint name="joint_3" type="prismatic">
     <parent link="link_2"/>
     <child link="link_3"/>
-    <!-- joint_3 origin from T3-401S CAD (planar SCARA at same Z as
-         joint_2; see t3_401_tweezer.urdf for derivation). -->
-    <origin xyz="0.129 -0.023 0" rpy="0 0 0"/>
+    <!-- joint_3 origin from real T3-401S spec (arm2 = 175 mm, planar).
+         Spec preferred over CAD because IK is much more reliable with a
+         planar SCARA; see t3_401_tweezer.urdf for details. -->
+    <origin xyz="0.175 0 0" rpy="0 0 0"/>
     <axis xyz="0 0 -1"/>
-    <limit lower="0.0" upper="0.150" effort="120.0" velocity="1.0"/>
+    <limit lower="0.0" upper="0.200" effort="120.0" velocity="1.0"/>
     <dynamics damping="3.0" friction="0.5"/>
   </joint>
 

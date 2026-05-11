@@ -69,7 +69,13 @@ def _t3_401_simple_gripper() -> ArticulationCfg:
             # J3 prismatic Z drive: stiff position control to hold against gravity.
             "z_axis": ImplicitActuatorCfg(
                 joint_names_expr=["joint_3"],
-                stiffness=2000.0,
+                # explicit velocity_limit_sim overrides the URDF's 1 m/s cap
+                # (which throttled descent to ~3 mm/env-step, stalling DESCEND
+                # at TCP z~0.106 in pick_plant_out_of_vial); 2 m/s lets the IK
+                # actually deliver the oracle's commanded max_dz=0.05 m/step.
+                effort_limit_sim=200.0,
+                velocity_limit_sim=2.0,
+                stiffness=4000.0,
                 damping=80.0,
                 friction=0.0,
                 armature=0.0,
@@ -150,7 +156,13 @@ def _t3_401_tweezer() -> ArticulationCfg:
             ),
             "z_axis": ImplicitActuatorCfg(
                 joint_names_expr=["joint_3"],
-                stiffness=2000.0,
+                # explicit velocity_limit_sim overrides the URDF's 1 m/s cap
+                # (which throttled descent to ~3 mm/env-step, stalling DESCEND
+                # at TCP z~0.106 in pick_plant_out_of_vial); 2 m/s lets the IK
+                # actually deliver the oracle's commanded max_dz=0.05 m/step.
+                effort_limit_sim=200.0,
+                velocity_limit_sim=2.0,
+                stiffness=4000.0,
                 damping=80.0,
                 friction=0.0,
                 armature=0.0,

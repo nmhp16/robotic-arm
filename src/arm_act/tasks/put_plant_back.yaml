@@ -190,15 +190,13 @@ grasp_check:
 # inside the vial cavity. After RELEASE the plant falls back to the
 # table (z=0.039) right at the vial xy — success terms trigger.
 oracle:
-  hover_height: 0.13                         # tcp at plant.z + 0.13 = ~0.17 (just
-                                             # below max TCP reach of 0.18 with
-                                             # the shorter 50 mm tweezer + real
-                                             # robot height joint_1=0.37)
+  hover_height: 0.10                         # tcp at plant.z + 0.10 = ~0.14
+                                             # (well inside TCP max 0.18 so the
+                                             # IK has clear margin)
   grasp_z_offset: 0.025                      # tcp at plant.z + 0.025 = ~0.065
                                              # inside the upper stem
-  lift_height: 0.18                          # near max retract (TCP_max=0.18 with
-                                             # the new shorter tweezer); clears
-                                             # the vial rim at z=0.105
+  lift_height: 0.16                          # under TCP max 0.18; clears the
+                                             # vial rim at z=0.105 with margin
   place_z_offset: 0.04                       # unused by _runtime_jar; kept for
                                              # default-template compatibility
   insert_z_offset: 0.08                      # tcp at vial.z + 0.08 = 0.115 ->
@@ -209,7 +207,7 @@ oracle:
   align_xy_tol: 0.012                        # tight xy alignment before descent
                                              # (vial mouth is 27 mm wide; 12 mm
                                              # tolerance keeps the stem centered)
-  retract_height: 0.18                       # lift back up clear of vial after
+  retract_height: 0.16                       # lift back up clear of vial after
                                              # release; matches lift_height
   max_dxy: 0.05
   max_dz: 0.05

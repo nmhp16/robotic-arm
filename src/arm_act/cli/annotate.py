@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import pathlib
 import runpy
+import shutil
 import sys
+import tempfile
 
 from arm_act.cli import isaaclab_script, register_tasks
 from arm_act.config import DEFAULT_TASK, load
@@ -29,6 +31,33 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--output", type=pathlib.Path, default=None,
                    help="default: data.annotated_path in tasks/<task>.yaml")
     return p.parse_args()
+
+
+def _strip_placeholders(src: pathlib.Path, dst: pathlib.Path) -> tuple[int, int]:
+    """Copy episodes with an ``actions`` group from src to dst, dropping
+    placeholder demos that only have ``initial_state``. Isaac Lab's
+    annotate_demos.py crashes with KeyError on the first such placeholder.
+
+    Returns (kept, dropped).
+    """
+    import h5py  # local import: keeps import time off the main path
+
+    kept = 0
+    dropped = 0
+    with h5py.File(src, "r") as f_in, h5py.File(dst, "w") as f_out:
+        for attr_name, attr_val in f_in.attrs.items():
+            f_out.attrs[attr_name] = attr_val
+        out_group = f_out.create_group("data")
+        in_group = f_in["data"]
+        for attr_name, attr_val in in_group.attrs.items():
+            out_group.attrs[attr_name] = attr_val
+        for ep_name in in_group:
+            if "actions" not in in_group[ep_name]:
+                dropped += 1
+                continue
+            f_in.copy(in_group[ep_name], out_group, name=ep_name)
+            kept += 1
+    return kept, dropped
 
 
 def main() -> int:
@@ -50,16 +79,28 @@ def main() -> int:
         return 2
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Oracle writes placeholder episodes (only ``initial_state``, no
+    # ``actions``) for slots where recording started but didn't complete.
+    # annotate_demos.py's ``episode.data["actions"]`` access KeyErrors on
+    # the first one, so pre-strip them into a temp HDF5.
+    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="annotate_input_"))
+    cleaned = tmp_dir / "demos_no_placeholders.hdf5"
+    kept, dropped = _strip_placeholders(in_path, cleaned)
+    print(f"[annotate] stripped placeholders: kept={kept} dropped={dropped} -> {cleaned}", flush=True)
+
     sys.argv = [
         "annotate_demos.py",
         "--task", cfg["task"]["mimic_gym_id"],
-        "--input_file", str(in_path),
+        "--input_file", str(cleaned),
         "--output_file", str(out_path),
         "--auto",
         "--headless",
         "--enable_cameras",
     ]
-    runpy.run_path(str(annotate), run_name="__main__")
+    try:
+        runpy.run_path(str(annotate), run_name="__main__")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return 0
 
 

@@ -131,16 +131,24 @@ grasp_check:
 # success when LIFT reaches lift_height. The tray is vestigial (kept for
 # YAML schema reasons) and never visited.
 oracle:
-  hover_height: 0.13                          # tcp at plant.z + 0.13 = ~0.17 (near
-                                              # max TCP reach 0.18 for real-height
-                                              # T3-401S + 50 mm tweezer)
+  hover_height: 0.10                          # tcp at plant.z + 0.10 = ~0.14
+                                              # (well inside TCP max 0.18 so the
+                                              # IK has clear margin to converge;
+                                              # 0.13 was right at the J3=0 limit
+                                              # and stalled half the episodes)
   grasp_z_offset: 0.025                       # tcp at plant.z + 0.025 = ~0.07
                                               # inside upper stem; well within
                                               # TCP range [0.03, 0.18]
-  lift_height: 0.18                           # max retract; clears the vial top
+  lift_height: 0.16                           # under TCP max 0.18; clears the
+                                              # vial top (z=0.105) with margin
   place_z_offset: 0.0
   max_dxy: 0.04
-  max_dz: 0.05
+  max_dz: 0.02                                # slow descent rate. With 0.05
+                                              # the IK target jumped 5 cm per
+                                              # env step, the actuator fell
+                                              # behind and the joint stalled
+                                              # mid-DESCEND. 2 cm/step lets the
+                                              # actuator stay close to target.
   xy_reach_tol: 0.004                         # tight: stem is 4 mm dia; tweezer pinches
                                               # the centerline so TCP must align within
                                               # ~ stem radius for the close to grip

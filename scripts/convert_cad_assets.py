@@ -50,6 +50,7 @@ ASSETS = [
         "collider": "convex_decomposition",
         "friction": (0.5, 0.4, 0.0),
         "collision_override": None,
+        "color_rgba": (0.5, 0.6, 0.5, 1.0),
     },
     {
         "stl": "leaf_plant",
@@ -59,17 +60,26 @@ ASSETS = [
         "scale": 0.001,
         "collider": "convex_decomposition",
         "friction": (3.0, 2.5, 0.0),
+        # Saturated green so the policy's vision backbone has a strong colour
+        # signal to localize the pickable against the grey table/vial/tray.
+        "color_rgba": (0.15, 0.75, 0.20, 1.0),
         # Override collision with a stout cylinder for the stem. The
         # 4 mm-radius collision is fatter than the 1.5 mm visual stem,
         # but PhysX needs enough contact area for the tweezer pinch to
         # transmit normal force without slipping — at sub-2 mm we get
         # glancing contacts. Plant still fits cleanly through the 27 mm
         # vial mouth.
+        # Tiny stub collision at the plant base. The full 80 mm-tall stem
+        # collision used to overlap with the wrist (link_4) cylinder during
+        # DESCEND, stalling the IK at z~0.106. Kinematic_attach captures the
+        # plant via root-to-TCP distance (capture_distance=0.10 m), not via
+        # contact, so a small base stub is sufficient — the tweezer can
+        # descend freely past the visual stem without colliding with anything.
         "collision_override": (
             '<collision>\n'
-            '      <origin xyz="0 0 0.040" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.005" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder length="0.080" radius="0.0040"/>\n'
+            '        <cylinder length="0.010" radius="0.0040"/>\n'
             '      </geometry>\n'
             '    </collision>'
         ),
@@ -88,7 +98,7 @@ URDF_TEMPLATE = """<?xml version="1.0"?>
       <geometry>
         <mesh filename="{mesh_path}" scale="{s} {s} {s}"/>
       </geometry>
-      <material name="grey"><color rgba="0.5 0.6 0.5 1.0"/></material>
+      <material name="mat"><color rgba="{r} {g} {b} {a}"/></material>
     </visual>
     {collision_block}
     <inertial>
@@ -160,6 +170,7 @@ def convert(
     collider_type: str = "convex_hull",
     friction: tuple | None = None,
     collision_override: str | None = None,
+    color_rgba: tuple = (0.5, 0.6, 0.5, 1.0),
 ) -> None:
     stl_path = os.path.join(CAD_OUTPUT, f"{stl_basename}.stl")
     if not os.path.isfile(stl_path):
@@ -179,12 +190,14 @@ def convert(
         collision_block = collision_override
     else:
         collision_block = DEFAULT_COLLISION_BLOCK.format(mesh_path=mesh_rel, s=scale)
+    r, g, b, a = color_rgba
     urdf_text = URDF_TEMPLATE.format(
         name=asset_dir_name,
         mesh_path=mesh_rel,
         s=scale,
         mass=mass,
         collision_block=collision_block,
+        r=r, g=g, b=b, a=a,
     )
     with tempfile.NamedTemporaryFile("w", suffix=".urdf", dir=usd_dir, delete=False) as f:
         urdf_path = f.name
@@ -233,6 +246,7 @@ def main() -> None:
                 collider_type=a["collider"],
                 friction=a["friction"],
                 collision_override=a["collision_override"],
+                color_rgba=a.get("color_rgba", (0.5, 0.6, 0.5, 1.0)),
             )
         except FileNotFoundError as e:
             print(f">>> SKIP {a['stl']}: {e}", flush=True)
