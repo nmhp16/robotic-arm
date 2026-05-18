@@ -63,18 +63,16 @@ ASSETS = [
         # Saturated green so the policy's vision backbone has a strong colour
         # signal to localize the pickable against the grey table/vial/tray.
         "color_rgba": (0.15, 0.75, 0.20, 1.0),
-        # Override collision with a stout cylinder for the stem. The
-        # 4 mm-radius collision is fatter than the 1.5 mm visual stem,
-        # but PhysX needs enough contact area for the tweezer pinch to
-        # transmit normal force without slipping — at sub-2 mm we get
-        # glancing contacts. Plant still fits cleanly through the 27 mm
-        # vial mouth.
         # Tiny stub collision at the plant base. The full 80 mm-tall stem
         # collision used to overlap with the wrist (link_4) cylinder during
         # DESCEND, stalling the IK at z~0.106. Kinematic_attach captures the
         # plant via root-to-TCP distance (capture_distance=0.10 m), not via
         # contact, so a small base stub is sufficient — the tweezer can
         # descend freely past the visual stem without colliding with anything.
+        # NOTE (2026-05-15): Tried friction grip (kinematic_attach=false) with
+        # taller stem collisions r=3..5 mm + friction up to (6.0, 5.0). All
+        # gave 0-4% oracle success. Reason: rigid-body sim can't capture the
+        # soft leaf-against-tweezer contact that holds real grips. Reverted.
         "collision_override": (
             '<collision>\n'
             '      <origin xyz="0 0 0.005" rpy="0 0 0"/>\n'
@@ -172,6 +170,33 @@ def convert(
     collision_override: str | None = None,
     color_rgba: tuple = (0.5, 0.6, 0.5, 1.0),
 ) -> None:
+    """Wrap one STL in a minimal URDF and convert it to USD under ``assets/<asset_dir_name>/``.
+
+    Writes ``assets/<asset_dir_name>/<asset_dir_name>.usd`` plus a copy of
+    the STL under ``meshes/`` so the URDF can reference it by relative path.
+
+    Args:
+        stl_basename: STL filename (without extension) inside ``CAD_OUTPUT``.
+        asset_dir_name: Subdirectory under ``assets/`` and the URDF link name.
+        mass: Link mass in kg.
+        kinematic: If True, sets ``fix_base`` on the URDF importer — pin the
+            asset in place. Use for static props (vials, pedestals).
+        scale: m per STL unit. STLs from build123d are mm, so pass ``0.001``.
+        collider_type: One of ``"convex_hull"``, ``"convex_decomposition"``,
+            ``"primitive"``. Decomposition is heavier but lets concave geometry
+            (e.g. a vial cavity) collide accurately.
+        friction: ``(static, dynamic, restitution)`` baked into the USD via a
+            PhysicsMaterial. ``None`` skips the bake — Isaac Lab will use its
+            default material at spawn time.
+        collision_override: Raw URDF ``<collision>...</collision>`` snippet to
+            substitute for the default mesh collider. Use when the mesh's
+            convex hull is unsuitable (e.g. a thin stem hidden inside leaves);
+            the visual mesh stays untouched.
+        color_rgba: Visual material RGBA in [0, 1].
+
+    Raises:
+        FileNotFoundError: If ``CAD_OUTPUT/<stl_basename>.stl`` is missing.
+    """
     stl_path = os.path.join(CAD_OUTPUT, f"{stl_basename}.stl")
     if not os.path.isfile(stl_path):
         raise FileNotFoundError(f"missing STL: {stl_path}")

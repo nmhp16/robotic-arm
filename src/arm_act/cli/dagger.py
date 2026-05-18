@@ -49,6 +49,20 @@ def _parse_args() -> argparse.Namespace:
                         "what gets relabeled)")
     p.add_argument("--output-suffix", default=None,
                    help="suffix for the output filename. Default: timestamp.")
+    p.add_argument(
+        "--policy-type",
+        choices=("act", "smolvla"),
+        default="act",
+        help="act: load checkpoint directly (in-process). "
+        "smolvla: spawn a subprocess in arm-act-venv that hosts the lerobot policy.",
+    )
+    p.add_argument(
+        "--server-python",
+        type=pathlib.Path,
+        default=None,
+        help="Python interpreter used for --policy-type=smolvla. "
+        "Defaults to $ARM_ACT_VENV/bin/python or ~/arm-act-venv/bin/python.",
+    )
     return p.parse_args()
 
 
@@ -82,14 +96,34 @@ def main() -> int:
         import arm_act.tasks
         arm_act.tasks.register()
 
-        from arm_act.training.act_policy import load_policy
         from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
 
         params = _OracleParams.from_spec(cfg)
         gripper_closed_threshold = float(cfg["robot"]["gripper_closed_threshold"])
         driver_joint = cfg["robot"]["gripper_driver_joint"]
 
-        policy = load_policy(checkpoint, device="cuda")
+        if args.policy_type == "smolvla":
+            import os
+            from arm_act.eval.remote_policy import RemotePolicy
+
+            server_python = (
+                args.server_python
+                or pathlib.Path(
+                    os.environ.get("ARM_ACT_VENV", str(pathlib.Path.home() / "arm-act-venv"))
+                ) / "bin" / "python"
+            )
+            if not server_python.exists():
+                raise FileNotFoundError(f"server python not found: {server_python}")
+            policy = RemotePolicy(
+                checkpoint=checkpoint,
+                server_python=server_python,
+                task_instruction=task_cfg["instruction"],
+                # Same camera order as smolvla_convert + rollout.py
+                camera_keys=["table_cam", "wrist_cam"],
+            )
+        else:
+            from arm_act.training.act_policy import load_policy
+            policy = load_policy(checkpoint, device="cuda")
         policy.action_horizon = args.action_horizon
 
         gym_id = task_cfg["gym_id"]

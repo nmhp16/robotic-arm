@@ -43,10 +43,19 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--hdf5-path", type=pathlib.Path, default=None)
+    p.add_argument(
+        "--gripper-classification",
+        action="store_true",
+        help="Treat the LAST action dim as binary {-1,+1} with a sigmoid+BCE head "
+        "instead of L1 regression. Avoids the 'predict the mean' hedging on binary "
+        "gripper signals. Backward incompatible — produces a checkpoint that only "
+        "the matching ACT inference path can load.",
+    )
     return p.parse_args()
 
 
 def _cosine_lr(step: int, warmup: int, total: int, peak: float, min_frac: float = 0.1) -> float:
+    """Linear warmup to ``peak`` over ``warmup`` steps, then cosine decay to ``min_frac * peak``."""
     if step < warmup:
         return peak * step / max(1, warmup)
     progress = (step - warmup) / max(1, total - warmup)
@@ -111,6 +120,7 @@ def main() -> int:
         action_max=dataset.action_stats.max.tolist(),
         state_mean=dataset.state_stats.mean.tolist(),
         state_std=dataset.state_stats.std.tolist(),
+        gripper_classification=bool(args.gripper_classification),
     )
     model = ACTModel(model_cfg).to(device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -147,8 +157,22 @@ def main() -> int:
             state_norm = normalize_states(state, dataset.state_stats)
             action_norm = normalize_actions(action, dataset.action_stats)
 
-            pred = model(images, state_norm)  # (B, chunk, action_dim) in [-1, 1]
-            loss_per_step = F.l1_loss(pred, action_norm, reduction="none").mean(dim=-1)  # (B, chunk)
+            pred = model(images, state_norm)  # (B, chunk, action_dim)
+            if model.cfg.gripper_classification:
+                # Continuous dims: L1 vs normalized targets. Gripper dim:
+                # BCE-with-logits vs binary {-1,+1}→{0,1} target. Equal-
+                # weighted; bump the gripper coefficient if it underfits.
+                pos_pred = pred[..., :-1]
+                grip_logit = pred[..., -1]
+                pos_target = action_norm[..., :-1]
+                grip_target = ((action[..., -1] + 1.0) * 0.5).clamp(0.0, 1.0)
+                pos_loss = F.l1_loss(pos_pred, pos_target, reduction="none").mean(dim=-1)
+                grip_loss = F.binary_cross_entropy_with_logits(
+                    grip_logit, grip_target, reduction="none"
+                )
+                loss_per_step = pos_loss + grip_loss
+            else:
+                loss_per_step = F.l1_loss(pred, action_norm, reduction="none").mean(dim=-1)  # (B, chunk)
             mask = (~pad).to(loss_per_step.dtype)
             loss = (loss_per_step * mask).sum() / mask.sum().clamp_min(1.0)
 

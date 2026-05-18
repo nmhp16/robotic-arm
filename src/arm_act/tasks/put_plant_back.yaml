@@ -60,13 +60,10 @@ robot:
   gripper_driver_joint: finger_left_joint
   # Default kinematic_attach (on): the plant is welded to the TCP when
   # the gripper closes. We tried real friction grip (use_kinematic_attach
-  # false), but the leaf_plant's rigid leaves at z=0.105..0.12 are
-  # ~5 cm wide and the tweezer's 9 cm-long finger collision crushed
-  # them on close, tipping the plant off the tray. Kinematic_attach
-  # sidesteps this by bypassing contact physics during the held phase
-  # — visually identical (fingers do close), demos are reliable. To
-  # revisit real grip, the leaf_plant USD would need flexible leaves
-  # or much narrower stem-only geometry.
+  # false) with stem-only collision (r=3..5 mm) + friction up to (6.0,
+  # 5.0) on 2026-05-15 — all gave 0-4% oracle success. Rigid-body sim
+  # can't model the soft leaf-against-tweezer contact that holds real
+  # grips. CLAUDE.md rule #18 + see friction_grip_attempted memory.
 
 # --- Scene objects ----------------------------------------------------------
 # plant: leaf_plant USD. Spawns above a kinematic "tray" pad — gives it

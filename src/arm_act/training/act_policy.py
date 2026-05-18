@@ -60,6 +60,13 @@ class ACTConfig:
     state_mean: list[float] = field(default_factory=list)
     state_std: list[float] = field(default_factory=list)
 
+    # If True, the LAST action dim is treated as a binary {-1,+1} gripper
+    # signal: predicted via a separate sigmoid head with BCE-with-logits loss.
+    # The first (action_dim - 1) dims are continuous (L1 loss as usual).
+    # This avoids the "predict the mean +0.7" hedging behaviour we observed
+    # on the put_plant_back task — see session memory on the gripper-head fix.
+    gripper_classification: bool = False
+
 
 def _sinusoidal_2d_pos_embed(h: int, w: int, dim: int) -> torch.Tensor:
     """Standard 2D sinusoidal positional embedding, (h*w, dim)."""
@@ -118,7 +125,16 @@ class ACTModel(nn.Module):
         self.state_proj = nn.Linear(cfg.state_dim, cfg.hidden_dim)
 
         self.action_queries = nn.Embedding(cfg.chunk_size, cfg.hidden_dim)
-        self.action_head = nn.Linear(cfg.hidden_dim, cfg.action_dim)
+        if cfg.gripper_classification:
+            # Continuous head for dx/dy/dz; classification logit for gripper.
+            # We still expose them as a single (chunk, action_dim) tensor so
+            # the rest of the API (normalization, eval, dagger.py) stays
+            # unchanged — but the last channel is a RAW logit, not a
+            # normalized continuous action.
+            self.pos_head = nn.Linear(cfg.hidden_dim, cfg.action_dim - 1)
+            self.gripper_head = nn.Linear(cfg.hidden_dim, 1)
+        else:
+            self.action_head = nn.Linear(cfg.hidden_dim, cfg.action_dim)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=cfg.hidden_dim,
@@ -184,6 +200,10 @@ class ACTModel(nn.Module):
         memory = self.encoder(memory_in)
         queries = self.action_queries.weight.unsqueeze(0).expand(B, -1, -1)  # (B, chunk, hidden)
         decoded = self.decoder(queries, memory)  # (B, chunk, hidden)
+        if self.cfg.gripper_classification:
+            pos = self.pos_head(decoded)            # (B, chunk, action_dim - 1)
+            grip = self.gripper_head(decoded)       # (B, chunk, 1) raw logit
+            return torch.cat([pos, grip], dim=-1)   # (B, chunk, action_dim)
         return self.action_head(decoded)
 
 
@@ -247,7 +267,13 @@ class ACTPolicy:
         a_min = torch.as_tensor(self.action_stats.min, dtype=action_norm.dtype, device=action_norm.device)
         a_max = torch.as_tensor(self.action_stats.max, dtype=action_norm.dtype, device=action_norm.device)
         span = (a_max - a_min).clamp_min(1e-6)
-        return (action_norm + 1.0) * 0.5 * span + a_min
+        raw = (action_norm + 1.0) * 0.5 * span + a_min
+        if self.model.cfg.gripper_classification:
+            # Last dim is a raw logit, not a normalized continuous value.
+            # Sigmoid+threshold it to the binary {-1, +1} gripper command.
+            logit = action_norm[..., -1]
+            raw[..., -1] = torch.where(torch.sigmoid(logit) > 0.5, 1.0, -1.0)
+        return raw
 
 
 def normalize_actions(actions: torch.Tensor, stats: NormStats) -> torch.Tensor:
@@ -271,6 +297,12 @@ def save_policy(
     action_stats: NormStats,
     state_stats: NormStats,
 ) -> None:
+    """Write a checkpoint that :func:`load_policy` can fully reconstruct.
+
+    Creates three files under ``out_dir``: ``model.pt`` (state dict),
+    ``config.json`` (``ACTConfig`` as JSON), and ``norm_stats.json``
+    (action + state mean/std/min/max). Parent dirs are created if needed.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), out_dir / "model.pt")
     cfg_dict = asdict(model.cfg)
@@ -286,6 +318,7 @@ def save_policy(
 
 
 def load_policy(ckpt_dir: pathlib.Path, device: str = "cuda") -> ACTPolicy:
+    """Reconstruct an :class:`ACTPolicy` from a directory written by :func:`save_policy`."""
     with open(ckpt_dir / "config.json") as f:
         cfg_dict = json.load(f)
     cfg_dict["camera_keys"] = tuple(cfg_dict["camera_keys"])

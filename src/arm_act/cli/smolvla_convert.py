@@ -37,6 +37,12 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--task", default=DEFAULT_TASK)
     p.add_argument(
+        "--input",
+        type=Path,
+        default=None,
+        help="HDF5 to convert. Default: data.augmented_path if it exists, else data.raw_path.",
+    )
+    p.add_argument(
         "--output-root",
         type=Path,
         default=Path("data/lerobot"),
@@ -67,15 +73,18 @@ def main() -> int:
     args = p.parse_args()
 
     spec = load(args.task)
-    hdf5_path = Path(spec["data"]["raw_path"])
+    if args.input is not None:
+        hdf5_path = args.input
+    else:
+        augmented = Path(spec["data"].get("augmented_path", ""))
+        raw = Path(spec["data"]["raw_path"])
+        hdf5_path = augmented if augmented and augmented.exists() else raw
     if not hdf5_path.is_absolute():
-        # Same convention as the rest of the pipeline: paths are relative
-        # to the repo root, so resolve from CWD when invoked via the bash
-        # wrapper which cd's to REPO_ROOT.
         hdf5_path = hdf5_path.resolve()
     if not hdf5_path.exists():
-        print(f"raw demos file not found: {hdf5_path}", file=sys.stderr)
+        print(f"demos file not found: {hdf5_path}", file=sys.stderr)
         return 1
+    print(f"converting from: {hdf5_path}")
 
     instruction = spec["task"].get("instruction")
     if not instruction:

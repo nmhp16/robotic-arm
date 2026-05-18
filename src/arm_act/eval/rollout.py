@@ -56,10 +56,24 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="How many actions of each predicted chunk to execute before re-planning. Default: chunk_size (full open-loop replay).",
     )
+    p.add_argument(
+        "--threshold-gripper",
+        action="store_true",
+        help="Snap the last action dim (gripper) to +1 if >0 else -1 before env.step(). "
+        "Diagnostic for BC failures where the policy outputs hedged gripper values that "
+        "never cross the env's open/close threshold.",
+    )
     return p.parse_args()
 
 
 def _check_success(env) -> bool:
+    """Re-evaluate the env's success termination term at the current state.
+
+    Used when ``info["termination"]["success"]`` isn't populated (some
+    isaaclab versions skip it on the final step). Returns False if the
+    termination config is missing or shaped unexpectedly — failure to
+    detect success is preferable to crashing the eval at episode end.
+    """
     try:
         term = env.unwrapped.cfg.terminations.success
         return bool(term.func(env.unwrapped, **term.params)[0])
@@ -168,29 +182,55 @@ def main() -> int:
                 frames.append(np.concatenate([table, wrist], axis=1))
 
                 action = policy.select_action(cam_imgs, state)  # (action_dim,)
+                if args.threshold_gripper:
+                    action = action.copy()
+                    action[-1] = 1.0 if action[-1] > 0 else -1.0
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
 
-                # TEMP eval-trace: sample env state at intervals so we can see
-                # where the policy gets stuck. Remove once we have 1+ success.
+                # Diagnostic trace, gated behind ARM_ACT_TRACE_EVAL=1. Logs
+                # policy vs oracle action at every step of ep 0 so we can tell
+                # state-mapping bugs (diverges from t=0) from compounding error
+                # (matches oracle early, then drifts). Aliased import avoids
+                # shadowing the module-level `import os` inside this nested scope.
+                # TODO(nmhp16): remove once put_plant_back BC reaches >50% — see
+                # scripts/diagnose_policy.py for the standalone equivalent.
                 import os as _os
-                if _os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0 and t in (0, 50, 100, 150, 200, 250, 299):
+                if _os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0:
                     try:
-                        _pl = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
-                        _tg = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
-                        _tc = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
-                        _gp = float(grip[0])
-                        _atch = bool(getattr(env.unwrapped, "_kinematic_attach_active", torch.zeros(1))[0])
+                        _env_o = env.unwrapped.scene.env_origins[0].cpu().numpy()
+                        _tc_w = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
+                        _pl_w = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
+                        _tg_w = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
+                        _tc = _tc_w - _env_o
+                        _pl = _pl_w - _env_o
+                        _tg = _tg_w - _env_o
+                        _robot = env.unwrapped.scene["robot"]
+                        _grip_idx = _robot.data.joint_names.index(cfg["robot"].get("gripper_driver_joint", "finger_left_joint"))
+                        _gp = float(_robot.data.joint_pos[0, _grip_idx])
+                        # Oracle's action at this state
+                        from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
+                        if t == 0:
+                            globals()["_dbg_or_params"] = _OracleParams.from_spec(cfg)
+                            globals()["_dbg_or_close_thr"] = float(cfg["robot"].get("gripper_closed_threshold", 0.0025))
+                        _ora = oracle_action_at_state(
+                            tcp=_tc, pickable_pos=_pl, target_pos=_tg,
+                            gripper_drive_pos=_gp,
+                            gripper_closed_threshold=globals().get("_dbg_or_close_thr", 0.0025),
+                            params=globals().get("_dbg_or_params"),
+                        )
                         print(
-                            f"[TRACE] ep0 t={t} act={action.tolist()} "
-                            f"plant=[{_pl[0]:+.3f},{_pl[1]:+.3f},{_pl[2]:+.3f}] "
-                            f"tray=[{_tg[0]:+.3f},{_tg[1]:+.3f},{_tg[2]:+.3f}] "
+                            f"[TRACE] t{t:02d} "
+                            f"pol=[{action[0]:+.3f},{action[1]:+.3f},{action[2]:+.3f},{action[3]:+.2f}] "
+                            f"ora=[{_ora[0]:+.3f},{_ora[1]:+.3f},{_ora[2]:+.3f},{_ora[3]:+.2f}] "
                             f"tcp=[{_tc[0]:+.3f},{_tc[1]:+.3f},{_tc[2]:+.3f}] "
-                            f"grip={_gp:.4f} attach={_atch}",
+                            f"plant=[{_pl[0]:+.3f},{_pl[1]:+.3f},{_pl[2]:+.3f}] "
+                            f"vial=[{_tg[0]:+.3f},{_tg[1]:+.3f},{_tg[2]:+.3f}] "
+                            f"grip={_gp:.4f}",
                             flush=True,
                         )
                     except Exception as _exc:
-                        print(f"[TRACE] err: {_exc}", flush=True)
+                        print(f"[TRACE] err t={t}: {_exc}", flush=True)
 
                 if bool(terminated[0]) or bool(truncated[0]):
                     term_info = info.get("termination", {}) if isinstance(info, dict) else {}
