@@ -196,7 +196,7 @@ def main(spec: dict[str, Any]) -> int:
                         f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
                         f"obj=[{pickable_now[0]:+.3f},{pickable_now[1]:+.3f},{pickable_now[2]:+.3f}] "
                         f"tgt=[{target_now[0]:+.3f},{target_now[1]:+.3f},{target_now[2]:+.3f}] "
-                        f"act_grip={action[-1]:+.1f} obs_grip={gripper_rad:.2f} reached={reached}",
+                        f"act_grip={action[-1]:+.1f} obs_grip={gripper_rad:.4f} reached={reached}",
                         flush=True,
                     )
                 prev_phase = phase

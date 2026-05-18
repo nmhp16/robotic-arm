@@ -296,6 +296,107 @@ pip install -e ".[ml,smolvla]"
   clean, then fine-tune SmolVLA on the same data for the harder
   generalization questions.
 
+### Closed-loop RL fine-tune
+
+Pure BC can plateau at "end-effector reaches the object area but never
+closes the gripper at the right moment" — the policy learns the average
+demo trajectory rather than a state-conditioned action sequence. The
+repo includes a shaped RL setup for fine-tuning past that ceiling.
+
+What's wired (task/robot-agnostic, lives in `_runtime/`):
+
+- `mdp.reward_tcp_to_pickable` — `-xy_dist(TCP, pickable)` when gripper open
+- `mdp.reward_pickable_to_target` — `-xy_dist(pickable, target)` when gripper closed
+- `mdp.reward_grasp_at_pickable` — `+1` if gripper closed near pickable
+- `mdp.reward_object_on_target` — `+1` per step task success holds
+- `mdp.reward_action_penalty` — `-|action|^2` regularizer
+- `base_env_cfg.RewardsCfg` — packs the five terms with sensible default weights
+- `env_cfg.build_env_cfg(spec, ..., enable_rewards=True)` — opt-in flag that
+  attaches `RewardsCfg` and wires per-term `params` from the task yaml
+- `tasks.register()` — registers an `…-RL-v0` gym id alongside the IL id
+  for every task
+
+Per-task weight overrides go in the task yaml — any subset is fine:
+
+```yaml
+rewards:
+  approach_pickable: 1.0
+  approach_target: 1.0
+  grasp_bonus: 1.0
+  lift_bonus: 0.0
+  success_bonus: 50.0
+  action_l2_penalty: -0.001
+  # Optional knobs:
+  lift_height: 0.10                  # required lift in metres for lift_bonus
+  success_termination: placed        # "placed" (default) or "lifted"
+```
+
+**Factored pick-only mode** — when the place pose is known at runtime
+and the policy only needs to learn the precision-required grasp + lift
+phases, set:
+
+```yaml
+rewards:
+  approach_pickable: 1.0
+  approach_target: 0.0               # transport handled by scripted controller
+  grasp_bonus: 1.0
+  lift_bonus: 50.0                   # main success signal
+  success_bonus: 0.0
+  action_l2_penalty: -0.001
+  lift_height: 0.10
+  success_termination: lifted        # episode ends on grasp+lift
+```
+
+The episode terminates as soon as the policy has grasped the pickable
+and lifted it by `lift_height` metres. A scripted controller in
+`eval/rollout.py` handles the deterministic transport-to-target phase
+after handoff. Much shorter training horizon than end-to-end.
+
+Smoke-test the env (any task) before launching a real PPO run:
+
+```bash
+env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
+    "$ISAACLAB/isaaclab.sh" -p scripts/smoke_rl_env.py \
+    --task <task_name> --num-envs 4 --steps 10
+```
+
+Once the env exits with `smoke test PASSED`, drive PPO via the wrapper
+script — it registers the arm_act gym ids first, then forwards to
+Isaac Lab's bundled trainer:
+
+```bash
+env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
+    "$ISAACLAB/isaaclab.sh" -p scripts/train_ppo_full.py \
+    --task Isaac-<Task>-T3-IK-Rel-RL-v0 \
+    --num_envs 1024 --headless --enable_cameras
+```
+
+(Calling `rsl_rl/train.py` directly fails with `NameNotFound` — Isaac
+Lab's trainer doesn't know about external task packages, so a wrapper
+that imports `arm_act.tasks` first is required.)
+
+The default actor-critic + PPO hyperparameters live in
+`arm_act.training.ppo_cfg:DefaultPPORunnerCfg` and are wired to every
+`-RL-v0` gym id at registration time. Override on the CLI
+(`--max_iterations`, `--seed`, etc.) for per-task tuning instead of
+forking the config.
+
+Training artifacts (model_*.pt, tensorboard events, exported JIT/ONNX)
+land under `checkpoints/<experiment_name>/<run_timestamp>/` — same
+parent as the BC/ACT trainers. Eval outputs (success rates, videos)
+land under `eval/runs/<timestamp>/` regardless of policy class:
+
+```bash
+env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
+    "$ISAACLAB/isaaclab.sh" -p scripts/eval_ppo_full.py \
+    --task Isaac-<Task>-T3-IK-Rel-RL-v0 \
+    --num_envs 32 --num_episodes 50 --headless --video \
+    --checkpoint checkpoints/arm_act_rl/<run>/model_199.pt
+```
+
+Writes `summary.json` (success/time_out/drop counts) and an MP4 to a
+new `eval/runs/<timestamp>/` dir.
+
 ## Scope
 
 Out of scope for this repo:

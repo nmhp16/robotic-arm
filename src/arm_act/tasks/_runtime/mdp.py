@@ -252,3 +252,170 @@ def object_on_target(
         return placed
     gripper_open = pos < closed_threshold
     return torch.logical_and(placed, gripper_open)
+
+
+# --- RL reward terms -------------------------------------------------------
+# These are shaped rewards for closed-loop RL fine-tuning. They run on every
+# step and return (num_envs,) tensors. Each returns a single scalar value
+# per env that the RewardsCfg manager will sum (with per-term weights).
+
+def reward_tcp_to_pickable(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Negative xy distance between TCP and pickable. Active only when the
+    gripper is OPEN (i.e. the policy is in approach phase). Negative dist
+    means the closer the better; once gripper closes this becomes ~0 so it
+    doesn't fight the next phase."""
+    ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    diff = obj.data.root_pos_w[:, :2] - ee_frame.data.target_pos_w[:, 0, :2]
+    dist = torch.linalg.vector_norm(diff, dim=1)
+    gripper_pos = _gripper_drive_pos(env, driver_joint)
+    if gripper_pos is None:
+        return -dist
+    open_mask = (gripper_pos < closed_threshold).to(dist.dtype)
+    return -dist * open_mask
+
+
+def reward_pickable_to_target(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Negative xy distance between pickable and target. Active only when
+    the gripper is CLOSED (i.e. the policy has the object and is transporting
+    it). This drives the MOVE / ALIGN phases."""
+    obj: RigidObject = env.scene[object_cfg.name]
+    tgt: RigidObject = env.scene[target_cfg.name]
+    diff = obj.data.root_pos_w[:, :2] - tgt.data.root_pos_w[:, :2]
+    dist = torch.linalg.vector_norm(diff, dim=1)
+    gripper_pos = _gripper_drive_pos(env, driver_joint)
+    if gripper_pos is None:
+        return -dist
+    closed_mask = (gripper_pos >= closed_threshold).to(dist.dtype)
+    return -dist * closed_mask
+
+
+def reward_grasp_at_pickable(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """+1 every step the gripper is closed AND the TCP is within
+    `diff_threshold` of the object. Encourages closing at the right moment."""
+    return object_grasped(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    ).to(torch.float32)
+
+
+def reward_object_on_target(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    target_cfg: SceneEntityCfg = SceneEntityCfg("target"),
+    xy_threshold: float = 0.05,
+    height_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """+1 every step task success holds (object placed at target, gripper
+    open). Should be heavily weighted — this is the only signal that
+    actually defines task success."""
+    return object_on_target(
+        env,
+        object_cfg=object_cfg,
+        target_cfg=target_cfg,
+        xy_threshold=xy_threshold,
+        height_threshold=height_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    ).to(torch.float32)
+
+
+def reward_action_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Squared L2 of the last action — regularizes against wild commands.
+    Returned as POSITIVE; use a negative weight in the RewardsCfg."""
+    a = env.action_manager.action
+    return torch.sum(a * a, dim=-1)
+
+
+def _pickable_initial_z(env: ManagerBasedRLEnv, object_name: str) -> torch.Tensor:
+    """Lazily cache the at-reset z of the pickable so the lift reward can
+    measure displacement relative to spawn height instead of an absolute
+    threshold (works regardless of where the plant lands after settling)."""
+    attr = f"_initial_pickable_z_{object_name}"
+    if not hasattr(env, attr):
+        obj: RigidObject = env.scene[object_name]
+        setattr(env, attr, obj.data.root_pos_w[:, 2].clone())
+    return getattr(env, attr)
+
+
+def reward_lift_to_height(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    lift_height: float = 0.10,
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Continuous lift reward for factored pick-only RL.
+
+    +1 per step while the gripper is closed near the pickable AND the
+    pickable has been raised by ``lift_height`` metres relative to its
+    spawn height. Use a large weight (~50) to make this the dominant
+    success signal — paired with ``pickable_lifted`` termination, it
+    forms a short-horizon "did the policy grab + lift?" reward that's
+    much easier for RL to learn than the full pick-and-place sequence.
+
+    For the full pick-place task use ``reward_object_on_target`` instead;
+    they are complementary, not redundant."""
+    grasped = object_grasped(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    obj: RigidObject = env.scene[object_cfg.name]
+    z0 = _pickable_initial_z(env, object_cfg.name)
+    lifted = (obj.data.root_pos_w[:, 2] - z0) >= lift_height
+    return torch.logical_and(grasped, lifted).to(torch.float32)
+
+
+def pickable_lifted(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    lift_height: float = 0.10,
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Termination: True when the policy has grasped + lifted the pickable
+    by ``lift_height`` metres. Drop this as the success terminator on
+    factored pick-only RL so episodes end as soon as the pickable is
+    held aloft, freeing the scripted transport phase to take over."""
+    return reward_lift_to_height(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        lift_height=lift_height,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    ).bool()

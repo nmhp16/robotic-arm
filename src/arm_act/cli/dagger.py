@@ -96,7 +96,11 @@ def main() -> int:
         import arm_act.tasks
         arm_act.tasks.register()
 
-        from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
+        from arm_act.tasks._runtime.oracle import (
+            _OracleParams,
+            oracle_action_at_state,
+            snapshot_env_state,
+        )
 
         params = _OracleParams.from_spec(cfg)
         gripper_closed_threshold = float(cfg["robot"]["gripper_closed_threshold"])
@@ -146,11 +150,9 @@ def main() -> int:
         )
 
         success_term = env.unwrapped.cfg.terminations.success
-        robot = env.unwrapped.scene["robot"]
-        try:
-            grip_idx = robot.data.joint_names.index(driver_joint)
-        except ValueError as e:
-            raise RuntimeError(f"driver joint {driver_joint!r} not found on robot") from e
+        # Fail fast at startup so snapshot_env_state doesn't blow up mid-episode.
+        if driver_joint not in env.unwrapped.scene["robot"].data.joint_names:
+            raise RuntimeError(f"driver joint {driver_joint!r} not found on robot")
 
         total_steps = 0
         successes = 0
@@ -168,20 +170,12 @@ def main() -> int:
             success = False
             for t in range(max_steps):
                 # ---- Snapshot env state for the oracle query ------------
-                env_origin = env.unwrapped.scene.env_origins[0].cpu().numpy()
-                tcp_w = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
-                pickable_w = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
-                target_w = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
-                tcp_local = tcp_w - env_origin
-                pickable_local = pickable_w - env_origin
-                target_local = target_w - env_origin
-                grip_pos = float(robot.data.joint_pos[0, grip_idx])
-
+                snap = snapshot_env_state(env, driver_joint)
                 oracle_a = oracle_action_at_state(
-                    tcp=tcp_local,
-                    pickable_pos=pickable_local,
-                    target_pos=target_local,
-                    gripper_drive_pos=grip_pos,
+                    tcp=snap.tcp,
+                    pickable_pos=snap.pickable,
+                    target_pos=snap.target,
+                    gripper_drive_pos=snap.gripper_pos,
                     gripper_closed_threshold=gripper_closed_threshold,
                     params=params,
                 )

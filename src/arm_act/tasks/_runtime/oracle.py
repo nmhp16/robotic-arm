@@ -46,7 +46,7 @@ import pathlib
 import sys
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 from isaaclab.app import AppLauncher
 
@@ -289,7 +289,7 @@ def main(spec: dict[str, Any]) -> int:
                         f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
                         f"obj=[{pickable_now[0]:+.3f},{pickable_now[1]:+.3f},{pickable_now[2]:+.3f}] "
                         f"tgt=[{target_now[0]:+.3f},{target_now[1]:+.3f},{target_now[2]:+.3f}] "
-                        f"act_grip={action[-1]:+.1f} obs_grip={gripper_rad:.2f} reached={reached}",
+                        f"act_grip={action[-1]:+.1f} obs_grip={gripper_rad:.4f} reached={reached}",
                         flush=True,
                     )
                 prev_phase = phase
@@ -547,6 +547,51 @@ def _compute_action(tcp, wp_pos, gripper_open: bool, p: _OracleParams, j: _Episo
         # 7-D Franka IK env that slices action[:, 3:6] for delta_rotation).
         return np.array([dx, dy, dz, 0.0, 0.0, 0.0, gripper_cmd], dtype=np.float32)
     return np.array([dx, dy, dz, gripper_cmd], dtype=np.float32)
+
+
+class EnvStateSnapshot(NamedTuple):
+    """Env-local positions + gripper driver-joint reading for one env.
+
+    Field names match the kwargs of :func:`oracle_action_at_state` so the
+    common pattern ``snapshot_env_state(...)`` → ``oracle_action_at_state(...)``
+    flows naturally.
+    """
+    tcp: "np.ndarray"
+    pickable: "np.ndarray"
+    target: "np.ndarray"
+    gripper_pos: float
+
+
+def snapshot_env_state(env, gripper_driver_joint: str) -> "EnvStateSnapshot":
+    """Sample the env state the oracle needs, in env-local coordinates.
+
+    Translates TCP / pickable / target positions by
+    ``scene.env_origins[0]`` so the values match what the oracle and the
+    task YAML's waypoints expect (task-frame, not world-frame). Reads
+    scene keys ``"ee_frame"``, ``"pickable"``, ``"target"``, ``"robot"`` —
+    the parametric runtime guarantees all four exist.
+
+    Assumes ``num_envs == 1`` (oracle queries are single-env).
+
+    Args:
+        env: The ``gym.make()``-wrapped Isaac Lab env.
+        gripper_driver_joint: Joint name from ``cfg["robot"]["gripper_driver_joint"]``;
+            its commanded position drives the open/closed check downstream.
+
+    Raises:
+        ValueError: If ``gripper_driver_joint`` isn't in the robot's joint list.
+    """
+    import numpy as np  # noqa: F401  — kept lazy to match module convention
+
+    scene = env.unwrapped.scene
+    env_origin = scene.env_origins[0].cpu().numpy()
+    tcp = scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy() - env_origin
+    pickable = scene["pickable"].data.root_pos_w[0].cpu().numpy() - env_origin
+    target = scene["target"].data.root_pos_w[0].cpu().numpy() - env_origin
+    robot = scene["robot"]
+    grip_idx = robot.data.joint_names.index(gripper_driver_joint)
+    gripper_pos = float(robot.data.joint_pos[0, grip_idx])
+    return EnvStateSnapshot(tcp=tcp, pickable=pickable, target=target, gripper_pos=gripper_pos)
 
 
 def oracle_action_at_state(

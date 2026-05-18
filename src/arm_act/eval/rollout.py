@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import logging
+import os
 import pathlib
 import sys
 import time
@@ -79,6 +80,54 @@ def _check_success(env) -> bool:
         return bool(term.func(env.unwrapped, **term.params)[0])
     except (AttributeError, KeyError, IndexError, TypeError):
         return False
+
+
+def _emit_eval_trace(env, cfg: dict, action, t: int) -> None:
+    """Print one line of policy-vs-oracle comparison at the current state.
+
+    Diagnostic-only; the caller gates on ``ARM_ACT_TRACE_EVAL``. Lets us
+    distinguish state-mapping bugs (policy diverges from t=0) from
+    compounding error (matches oracle early, then drifts). Catches
+    everything internally so a diagnostic miss never breaks the rollout.
+
+    Caches the oracle params + gripper threshold on the function object
+    (lazy on first call) — cfg lookups + ``_OracleParams.from_spec`` are
+    not free at 30 Hz.
+    """
+    try:
+        from arm_act.tasks._runtime.oracle import (
+            _OracleParams,
+            oracle_action_at_state,
+            snapshot_env_state,
+        )
+        if not hasattr(_emit_eval_trace, "_params"):
+            _emit_eval_trace._params = _OracleParams.from_spec(cfg)
+            _emit_eval_trace._close_thr = float(
+                cfg["robot"].get("gripper_closed_threshold", 0.0025)
+            )
+            _emit_eval_trace._driver_joint = cfg["robot"].get(
+                "gripper_driver_joint", "finger_left_joint"
+            )
+
+        snap = snapshot_env_state(env, _emit_eval_trace._driver_joint)
+        ora = oracle_action_at_state(
+            tcp=snap.tcp, pickable_pos=snap.pickable, target_pos=snap.target,
+            gripper_drive_pos=snap.gripper_pos,
+            gripper_closed_threshold=_emit_eval_trace._close_thr,
+            params=_emit_eval_trace._params,
+        )
+        print(
+            f"[TRACE] t{t:02d} "
+            f"pol=[{action[0]:+.3f},{action[1]:+.3f},{action[2]:+.3f},{action[3]:+.2f}] "
+            f"ora=[{ora[0]:+.3f},{ora[1]:+.3f},{ora[2]:+.3f},{ora[3]:+.2f}] "
+            f"tcp=[{snap.tcp[0]:+.3f},{snap.tcp[1]:+.3f},{snap.tcp[2]:+.3f}] "
+            f"plant=[{snap.pickable[0]:+.3f},{snap.pickable[1]:+.3f},{snap.pickable[2]:+.3f}] "
+            f"vial=[{snap.target[0]:+.3f},{snap.target[1]:+.3f},{snap.target[2]:+.3f}] "
+            f"grip={snap.gripper_pos:.4f}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[TRACE] err t={t}: {exc}", flush=True)
 
 
 def main() -> int:
@@ -188,49 +237,11 @@ def main() -> int:
                 action_t = torch.as_tensor(action, dtype=torch.float32, device=device).unsqueeze(0)
                 obs, _, terminated, truncated, info = env.step(action_t)
 
-                # Diagnostic trace, gated behind ARM_ACT_TRACE_EVAL=1. Logs
-                # policy vs oracle action at every step of ep 0 so we can tell
-                # state-mapping bugs (diverges from t=0) from compounding error
-                # (matches oracle early, then drifts). Aliased import avoids
-                # shadowing the module-level `import os` inside this nested scope.
-                # TODO(nmhp16): remove once put_plant_back BC reaches >50% — see
-                # scripts/diagnose_policy.py for the standalone equivalent.
-                import os as _os
-                if _os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0:
-                    try:
-                        _env_o = env.unwrapped.scene.env_origins[0].cpu().numpy()
-                        _tc_w = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
-                        _pl_w = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
-                        _tg_w = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
-                        _tc = _tc_w - _env_o
-                        _pl = _pl_w - _env_o
-                        _tg = _tg_w - _env_o
-                        _robot = env.unwrapped.scene["robot"]
-                        _grip_idx = _robot.data.joint_names.index(cfg["robot"].get("gripper_driver_joint", "finger_left_joint"))
-                        _gp = float(_robot.data.joint_pos[0, _grip_idx])
-                        # Oracle's action at this state
-                        from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
-                        if t == 0:
-                            globals()["_dbg_or_params"] = _OracleParams.from_spec(cfg)
-                            globals()["_dbg_or_close_thr"] = float(cfg["robot"].get("gripper_closed_threshold", 0.0025))
-                        _ora = oracle_action_at_state(
-                            tcp=_tc, pickable_pos=_pl, target_pos=_tg,
-                            gripper_drive_pos=_gp,
-                            gripper_closed_threshold=globals().get("_dbg_or_close_thr", 0.0025),
-                            params=globals().get("_dbg_or_params"),
-                        )
-                        print(
-                            f"[TRACE] t{t:02d} "
-                            f"pol=[{action[0]:+.3f},{action[1]:+.3f},{action[2]:+.3f},{action[3]:+.2f}] "
-                            f"ora=[{_ora[0]:+.3f},{_ora[1]:+.3f},{_ora[2]:+.3f},{_ora[3]:+.2f}] "
-                            f"tcp=[{_tc[0]:+.3f},{_tc[1]:+.3f},{_tc[2]:+.3f}] "
-                            f"plant=[{_pl[0]:+.3f},{_pl[1]:+.3f},{_pl[2]:+.3f}] "
-                            f"vial=[{_tg[0]:+.3f},{_tg[1]:+.3f},{_tg[2]:+.3f}] "
-                            f"grip={_gp:.4f}",
-                            flush=True,
-                        )
-                    except Exception as _exc:
-                        print(f"[TRACE] err t={t}: {_exc}", flush=True)
+                # TODO(nmhp16): remove _emit_eval_trace + this gate once
+                # put_plant_back BC reaches >50% — scripts/diagnose_policy.py
+                # is the standalone equivalent.
+                if os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0:
+                    _emit_eval_trace(env, cfg, action, t)
 
                 if bool(terminated[0]) or bool(truncated[0]):
                     term_info = info.get("termination", {}) if isinstance(info, dict) else {}

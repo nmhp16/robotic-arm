@@ -45,13 +45,26 @@ def main() -> None:
         joint_drive=UrdfConverterCfg.JointDriveCfg(
             target_type="position",
             gains=UrdfConverterCfg.JointDriveCfg.PDGainsCfg(
-                stiffness=100.0,
+                # B-iter3 (2026-05-18): K=800 for strong clamping (was 100
+                # pre-friction-grip), D=1.0 because critical damping for
+                # finger mass 0.005 kg is 2*sqrt(K*m) ≈ 4.0; D=5.0 from
+                # iter2 was overdamped and may have stalled the close.
+                stiffness=800.0,
                 damping=1.0,
             ),
         ),
     )
     converter = UrdfConverter(cfg)
     logger.info("USD written to: %s", converter.usd_path)
+
+    # Bake high friction onto the tweezer collisions (default PhysX μ=0.5
+    # otherwise). When the friction-combine mode is AVERAGE, plant μ=8.0 +
+    # tweezer μ=0.5 averages to 4.25; with MIN combine it'd collapse to
+    # 0.5 and the grip would just slip. Force the tweezer side to match
+    # the plant's high μ so the contact has high effective friction
+    # regardless of which combine mode PhysX/Isaac Lab uses.
+    from convert_cad_assets import _bake_friction_into_usd  # type: ignore
+    _bake_friction_into_usd(converter.usd_path, (8.0, 6.0, 0.0))
 
 
 if __name__ == "__main__":

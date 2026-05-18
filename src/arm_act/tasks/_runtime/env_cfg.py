@@ -46,18 +46,172 @@ from .robot_cfg import build_robot_cfg
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
-def build_env_cfg(spec: dict[str, Any], class_name: str) -> type:
+def build_env_cfg(spec: dict[str, Any], class_name: str, enable_rewards: bool = False) -> type:
     """Return a configclass-decorated subclass of PickPlaceEnvCfgBase
-    with all task-specific fields baked in from ``spec``."""
+    with all task-specific fields baked in from ``spec``.
+
+    Args:
+        enable_rewards: when True, attach a RewardsCfg (shaped rewards for
+            RL fine-tuning). The IL/oracle/mimic/dagger pipeline does NOT
+            need rewards, so this defaults to False to keep those flows
+            untouched.
+    """
+    from .base_env_cfg import RewardsCfg
 
     class _Cfg(PickPlaceEnvCfgBase):
         def __post_init__(self):
             super().__post_init__()
             _apply_spec(self, spec)
+            if enable_rewards:
+                self.rewards = RewardsCfg()
+                _apply_reward_params(self, spec)
 
     _Cfg.__name__ = class_name
     _Cfg.__qualname__ = class_name
     return configclass(_Cfg)
+
+
+def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
+    """Fill the per-reward-term ``params`` dict from the task spec.
+
+    Robot/task agnostic: pulls ``gripper_driver_joint`` and
+    ``gripper_closed_threshold`` from ``spec["robot"]`` (the same keys
+    used by the IL pipeline), pulls success thresholds from the
+    terminations block (kept in sync with the env's success_term).
+
+    Per-task weight overrides:
+      Add a ``rewards:`` block to the task yaml with any subset of:
+        rewards:
+          approach_pickable: 1.0
+          approach_target: 1.0
+          grasp_bonus: 1.0
+          success_bonus: 50.0
+          action_l2_penalty: -0.001
+      Missing keys keep the class default. Use 0.0 to disable a term."""
+    from isaaclab.managers import SceneEntityCfg
+
+    driver_joint = spec["robot"]["gripper_driver_joint"]
+    closed_threshold = float(spec["robot"]["gripper_closed_threshold"])
+    # success_bonus rewards "object_on_target" — keep its params bound to
+    # the placement geometry from the task yaml regardless of which
+    # termination mode (placed/lifted) is active. Reading directly from
+    # the spec means the success_bonus is still meaningful even if the
+    # user has switched terminations.success to pickable_lifted.
+    placement_params = dict(
+        object_cfg=SceneEntityCfg("pickable"),
+        target_cfg=SceneEntityCfg("target"),
+        xy_threshold=float(spec["success"]["xy_threshold"]),
+        height_threshold=float(spec["success"]["height_threshold"]),
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    rew = env_cfg.rewards
+
+    rew.approach_pickable.params = dict(
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg("pickable"),
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    rew.approach_target.params = dict(
+        object_cfg=SceneEntityCfg("pickable"),
+        target_cfg=SceneEntityCfg("target"),
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    rew.grasp_bonus.params = dict(
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg("pickable"),
+        diff_threshold=0.06,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    rew.success_bonus.params = placement_params
+    # Lift bonus — read lift_height from the task yaml's rewards block
+    # (default 0.10 m). Only meaningful if the user enables this term
+    # via a non-zero weight in the rewards: block.
+    rewards_block = spec.get("rewards") if isinstance(spec.get("rewards"), dict) else {}
+    lift_height = float(rewards_block.get("lift_height", 0.10))
+    rew.lift_bonus.params = dict(
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg("pickable"),
+        lift_height=lift_height,
+        diff_threshold=0.06,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    # action_l2_penalty needs no params.
+
+    # Per-task weight overrides from the task yaml. Non-weight keys
+    # (lift_height, success_termination) are consumed elsewhere and
+    # silently skipped here.
+    NON_WEIGHT_KEYS = {"lift_height", "success_termination"}
+    weights = (spec.get("rewards") or {})
+    for term_name, w in weights.items():
+        if term_name in NON_WEIGHT_KEYS:
+            continue
+        term = getattr(rew, term_name, None)
+        if term is None:
+            raise KeyError(
+                f"rewards.{term_name!r} in task spec doesn't match any "
+                f"reward term in RewardsCfg (known: approach_pickable, "
+                f"approach_target, grasp_bonus, lift_bonus, success_bonus, "
+                f"action_l2_penalty)"
+            )
+        term.weight = float(w)
+
+    # --- Strip cameras + image obs from RL env -------------------------------
+    # The default actor-critic in DefaultPPORunnerCfg is a state-only MLP.
+    # Keeping cameras spawned at RL time costs a CameraCfg per env, which
+    # blows past the GPU's Vulkan descriptor pool (~1024 viewports) when
+    # num_envs is large. Strip them so RL can scale to thousands of envs
+    # the same way locomotion tasks do.
+    # IL flow is unaffected — _apply_reward_params only runs for RL envs.
+    cameras = spec.get("cameras", {}) or {}
+    # Walk the obs terms and unset (set to None on a configclass field is
+    # equivalent to "no term" — the ObservationManager skips Nones cleanly,
+    # but ONLY if the parent group itself isn't None and still has at
+    # least one valid term remaining).
+    pol = env_cfg.observations.policy
+    for cam_name in list(cameras.keys()):
+        if hasattr(pol, cam_name) and getattr(pol, cam_name) is not None:
+            setattr(pol, cam_name, None)
+        # Detach the camera sensor from the scene (no descriptor cost).
+        if hasattr(env_cfg.scene, cam_name) and getattr(env_cfg.scene, cam_name) is not None:
+            setattr(env_cfg.scene, cam_name, None)
+    if hasattr(pol, "wrist_depth") and pol.wrist_depth is not None:
+        pol.wrist_depth = None
+    # NOTE: leave env_cfg.observations.rgb_camera as the empty
+    # configclass group — setting the whole group to None makes
+    # ObservationManager dim-summing fail on construction.
+
+    # --- Reduce obs to ONE group for rsl_rl ---------------------------------
+    # IL flow uses three groups: "policy" (state), "rgb_camera" (images,
+    # added by the camera loop earlier), "subtask_terms" (grasp/place
+    # booleans). rsl_rl's runner does ``check_nan(obs)`` which iterates
+    # obs.items() and expects each value to be a leaf Tensor. Multi-term
+    # groups without concatenation come through as nested TensorDicts;
+    # empty groups come through as empty TensorDicts — neither survives
+    # ``torch.isnan``.
+    #
+    # The MLP actor-critic only reads obs["policy"], so collapse the env
+    # to a single group: flatten policy via concatenate_terms=True, and
+    # delattr the others so ObservationManager doesn't see them at all.
+    env_cfg.observations.policy.concatenate_terms = True
+    for extra_group in ("rgb_camera", "subtask_terms"):
+        if hasattr(env_cfg.observations, extra_group):
+            try:
+                delattr(env_cfg.observations, extra_group)
+            except AttributeError:
+                # configclass may not allow delattr; fall back to clearing
+                # all ObsTerm fields so the group renders as empty obs.
+                grp = getattr(env_cfg.observations, extra_group)
+                if grp is not None:
+                    import dataclasses as _dc
+                    for f in _dc.fields(grp):
+                        v = getattr(grp, f.name, None)
+                        if v is not None and getattr(v, "func", None) is not None:
+                            setattr(grp, f.name, None)
 
 
 def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
@@ -183,7 +337,12 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                     # first physics sub-step of finger closure, before the
                     # closing fingers can knock the vial laterally.
                     "closed_threshold": attach_threshold,
-                    "capture_distance": 0.10,
+                    # 2 cm capture distance — tight enough to force the
+                    # policy to position TCP near the stem before
+                    # closing, so the learned behavior transfers
+                    # meaningfully to real friction grasping. Override
+                    # via robot.capture_distance in the task yaml.
+                    "capture_distance": float(robot_cfg.get("capture_distance", 0.02)),
                 },
             )
 
@@ -271,7 +430,34 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         "minimum_height": -0.05,
         "asset_cfg": SceneEntityCfg("pickable"),
     }
-    env_cfg.terminations.success.params = dict(sub.place.params)
+
+    # Success termination has two modes (selected via task yaml):
+    #   rewards.success_termination: "placed"  (default) — full pick-and-place
+    #     RL ends when the object_on_target condition is satisfied.
+    #   rewards.success_termination: "lifted"          — factored pick-only RL
+    #     ends when the policy has grasped + lifted the pickable. A scripted
+    #     controller takes over for transport.
+    # See RewardsCfg docstring for the matching reward-weight pattern.
+    rewards_block = spec.get("rewards") if isinstance(spec.get("rewards"), dict) else {}
+    success_mode = str(rewards_block.get("success_termination", "placed")).lower()
+    if success_mode == "lifted":
+        lift_height = float(rewards_block.get("lift_height", 0.10))
+        env_cfg.terminations.success.func = mdp.pickable_lifted
+        env_cfg.terminations.success.params = {
+            "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+            "object_cfg": SceneEntityCfg("pickable"),
+            "lift_height": lift_height,
+            "diff_threshold": 0.06,
+            "driver_joint": driver_joint,
+            "closed_threshold": closed_threshold,
+        }
+    elif success_mode == "placed":
+        env_cfg.terminations.success.params = dict(sub.place.params)
+    else:
+        raise ValueError(
+            f"rewards.success_termination must be 'placed' or 'lifted', "
+            f"got {success_mode!r}"
+        )
 
     # --- Misc sim settings + teleop device --------------------------------
     env_cfg.sim.render.antialiasing_mode = "DLAA"

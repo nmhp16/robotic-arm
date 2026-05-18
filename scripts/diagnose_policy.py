@@ -39,7 +39,11 @@ try:
 
     from arm_act.config import load
     from arm_act.training.act_policy import load_policy
-    from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
+    from arm_act.tasks._runtime.oracle import (
+        _OracleParams,
+        oracle_action_at_state,
+        snapshot_env_state,
+    )
 
     cfg = load(args.task)
     task_cfg = cfg["task"]
@@ -59,8 +63,6 @@ try:
     params = _OracleParams.from_spec(cfg)
     grip_close_thr = float(cfg["robot"]["gripper_closed_threshold"])
     driver_joint = cfg["robot"]["gripper_driver_joint"]
-    robot = env.unwrapped.scene["robot"]
-    grip_idx = robot.data.joint_names.index(driver_joint)
 
     log.info("=== diagnostic start: %d episodes x %d steps ===", args.num_episodes, args.num_steps)
     for ep in range(args.num_episodes):
@@ -68,20 +70,12 @@ try:
         policy.reset()
         log.info("--- ep %d ---", ep)
         for t in range(args.num_steps):
-            # State snapshot
-            env_origin = env.unwrapped.scene.env_origins[0].cpu().numpy()
-            tcp_w = env.unwrapped.scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy()
-            pick_w = env.unwrapped.scene["pickable"].data.root_pos_w[0].cpu().numpy()
-            tgt_w = env.unwrapped.scene["target"].data.root_pos_w[0].cpu().numpy()
-            tcp_local = tcp_w - env_origin
-            pick_local = pick_w - env_origin
-            tgt_local = tgt_w - env_origin
-            grip_pos = float(robot.data.joint_pos[0, grip_idx])
+            snap = snapshot_env_state(env, driver_joint)
 
             # Oracle action at this state
             oracle_a = oracle_action_at_state(
-                tcp=tcp_local, pickable_pos=pick_local, target_pos=tgt_local,
-                gripper_drive_pos=grip_pos, gripper_closed_threshold=grip_close_thr,
+                tcp=snap.tcp, pickable_pos=snap.pickable, target_pos=snap.target,
+                gripper_drive_pos=snap.gripper_pos, gripper_closed_threshold=grip_close_thr,
                 params=params,
             )
 
@@ -99,7 +93,7 @@ try:
             # Log: state + both actions
             log.info(
                 "ep%d t%02d  tcp_loc=[%+.3f %+.3f %+.3f]  pick_loc=[%+.3f %+.3f %+.3f]  tgt_loc=[%+.3f %+.3f %+.3f]  grip=%.3f",
-                ep, t, *tcp_local, *pick_local, *tgt_local, grip_pos,
+                ep, t, *snap.tcp, *snap.pickable, *snap.target, snap.gripper_pos,
             )
             log.info(
                 "       oracle=[%+.3f %+.3f %+.3f %+.2f]   policy=[%+.3f %+.3f %+.3f %+.2f]   diff=[%+.3f %+.3f %+.3f %+.2f]",

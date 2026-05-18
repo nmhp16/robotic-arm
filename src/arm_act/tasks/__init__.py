@@ -89,10 +89,13 @@ def register(force: bool = False) -> None:
         env_cfg_cls = build_env_cfg(spec, f"{prefix}EnvCfg")
         mimic_env_cls = build_mimic_env(spec, f"{prefix}MimicEnv")
         mimic_cfg_cls = build_mimic_env_cfg(env_cfg_cls, spec, f"{prefix}MimicEnvCfg")
+        # RL variant: same scene/actions, with a shaped RewardsCfg attached.
+        rl_env_cfg_cls = build_env_cfg(spec, f"{prefix}RLEnvCfg", enable_rewards=True)
 
         globals()[env_cfg_cls.__name__] = env_cfg_cls
         globals()[mimic_env_cls.__name__] = mimic_env_cls
         globals()[mimic_cfg_cls.__name__] = mimic_cfg_cls
+        globals()[rl_env_cfg_cls.__name__] = rl_env_cfg_cls
 
         gym.register(
             id=spec["task"]["gym_id"],
@@ -106,5 +109,25 @@ def register(force: bool = False) -> None:
             kwargs={"env_cfg_entry_point": f"arm_act.tasks:{mimic_cfg_cls.__name__}"},
             disable_env_checker=True,
         )
+        # RL gym id is derived from the IL gym id by replacing the trailing
+        # version suffix with -RL-v0. Skip if the IL gym id doesn't end
+        # cleanly (defensive — every current task ends with -v0).
+        #
+        # Also wires the rsl_rl agent config so Isaac Lab's bundled
+        # ``rsl_rl/train.py`` can resolve the PPO hyperparams from the
+        # gym registration. Per-task overrides should happen on the
+        # train.py CLI; we don't fork the config per task.
+        il_gym_id = spec["task"]["gym_id"]
+        if il_gym_id.endswith("-v0"):
+            rl_gym_id = il_gym_id[: -len("-v0")] + "-RL-v0"
+            gym.register(
+                id=rl_gym_id,
+                entry_point="isaaclab.envs:ManagerBasedRLEnv",
+                kwargs={
+                    "env_cfg_entry_point": f"arm_act.tasks:{rl_env_cfg_cls.__name__}",
+                    "rsl_rl_cfg_entry_point": "arm_act.training.ppo_cfg:DefaultPPORunnerCfg",
+                },
+                disable_env_checker=True,
+            )
 
     _registered = True

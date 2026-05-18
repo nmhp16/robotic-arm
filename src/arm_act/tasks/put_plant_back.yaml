@@ -55,15 +55,20 @@ robot:
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0
-  gripper_close_m: 0.005
+  # B-iter2: command 12mm close. URDF travel limit is 15mm; the new
+  # r=2mm stem stops the fingers at joint_pos ≈ 3mm. Residual stiffness
+  # force = 800 * (0.012 - 0.003) = 7.2 N clamping the stem. With
+  # closed_threshold=0.0025, the grasp check fires once the fingers are
+  # past the open position.
+  gripper_close_m: 0.012
   gripper_closed_threshold: 0.0025
   gripper_driver_joint: finger_left_joint
-  # Default kinematic_attach (on): the plant is welded to the TCP when
-  # the gripper closes. We tried real friction grip (use_kinematic_attach
-  # false) with stem-only collision (r=3..5 mm) + friction up to (6.0,
-  # 5.0) on 2026-05-15 — all gave 0-4% oracle success. Rigid-body sim
-  # can't model the soft leaf-against-tweezer contact that holds real
-  # grips. CLAUDE.md rule #18 + see friction_grip_attempted memory.
+  # Friction-grip B-iter1 (2026-05-18): try the no-weld path again with
+  # a tuned plant (mass 0.5g, μ=8.0/6.0, stem cylinder r=5mm) and
+  # higher-stiffness tweezer (800 N·m/rad). If oracle smoke is <20%,
+  # revert to use_kinematic_attach: true and add a tweezer fingertip
+  # pad. See friction_grip_attempted.md for prior data.
+  use_kinematic_attach: false
 
 # --- Scene objects ----------------------------------------------------------
 # plant: leaf_plant USD. Spawns above a kinematic "tray" pad — gives it
@@ -245,6 +250,26 @@ mimic:
       action_noise: 0.03
       num_interpolation_steps: 5
       description: Put the plant back into the vial
+
+# --- RL fine-tune (factored pick-only) -------------------------------------
+# Vial pose is known at machine startup, so the transport phase doesn't need
+# to be learned — RL only handles the precision parts (approach + grasp +
+# lift). A scripted controller in eval/rollout.py runs the place phase after
+# the policy hands off.
+rewards:
+  approach_pickable: 1.0
+  approach_target: 0.0           # transport is scripted
+  grasp_bonus: 0.0               # disabled — per-step grasp reward incentivizes
+                                 # "close gripper near plant and camp" because
+                                 # a 300-step timeout with 150 grasping steps
+                                 # outweighs a 50-step success episode (verified
+                                 # by reward-hacking observed at iter 40-70).
+  lift_bonus: 50.0               # only fires on success termination (one step
+                                 # then env resets) — true terminal bonus
+  success_bonus: 0.0             # no end-to-end placement check during RL
+  action_l2_penalty: -0.001
+  lift_height: 0.10              # 10 cm above spawn; clears the vial rim
+  success_termination: lifted    # episode ends on grasp+lift
 
 # --- Data paths + checkpoint locations -------------------------------------
 data:

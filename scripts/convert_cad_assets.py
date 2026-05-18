@@ -55,29 +55,30 @@ ASSETS = [
     {
         "stl": "leaf_plant",
         "asset_dir": "leaf_plant",
-        "mass": 0.002,
+        # Friction-grip B-iter1 (2026-05-18): drop mass 4x (less inertial
+        # slip during MOVE/ALIGN), raise μ, restore stem-cylinder collision
+        # at grasp height. Pair with use_kinematic_attach=false in the task
+        # yaml and the tweezer stiffness bump in
+        # assets/t3_401_tweezer/config.yaml.
+        "mass": 0.0005,
         "kinematic": False,
         "scale": 0.001,
         "collider": "convex_decomposition",
-        "friction": (3.0, 2.5, 0.0),
-        # Saturated green so the policy's vision backbone has a strong colour
-        # signal to localize the pickable against the grey table/vial/tray.
+        "friction": (8.0, 6.0, 0.0),
         "color_rgba": (0.15, 0.75, 0.20, 1.0),
-        # Tiny stub collision at the plant base. The full 80 mm-tall stem
-        # collision used to overlap with the wrist (link_4) cylinder during
-        # DESCEND, stalling the IK at z~0.106. Kinematic_attach captures the
-        # plant via root-to-TCP distance (capture_distance=0.10 m), not via
-        # contact, so a small base stub is sufficient — the tweezer can
-        # descend freely past the visual stem without colliding with anything.
-        # NOTE (2026-05-15): Tried friction grip (kinematic_attach=false) with
-        # taller stem collisions r=3..5 mm + friction up to (6.0, 5.0). All
-        # gave 0-4% oracle success. Reason: rigid-body sim can't capture the
-        # soft leaf-against-tweezer contact that holds real grips. Reverted.
+        # Stem collision at the grasp height (z=0.04–0.07). Leaves
+        # (z=0.105..0.12) intentionally have no collision to avoid the
+        # rigid-leaf interference failure mode flagged by the
+        # friction_grip_attempted memory.
         "collision_override": (
+            # B-iter2 (2026-05-18): r=2mm stem so the tweezer fingers (now
+            # with 15mm travel each) can actually clamp around it.
+            # Tradeoff per memory: smaller contact patch, but compensated
+            # by μ=8.0 and heavier clamp from the higher tweezer stiffness.
             '<collision>\n'
-            '      <origin xyz="0 0 0.005" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.055" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder length="0.010" radius="0.0040"/>\n'
+            '        <cylinder length="0.030" radius="0.0020"/>\n'
             '      </geometry>\n'
             '    </collision>'
         ),

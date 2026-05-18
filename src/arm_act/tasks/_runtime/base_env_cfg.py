@@ -16,6 +16,7 @@ from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import ActionTermCfg
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
+from isaaclab.managers import RewardTermCfg as RewTerm
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
@@ -114,6 +115,42 @@ class TerminationsCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     pickable_dropping = DoneTerm(func=mdp.root_height_below_minimum)
     success = DoneTerm(func=mdp.object_on_target)
+
+
+@configclass
+class RewardsCfg:
+    """Shaped rewards for closed-loop RL fine-tuning.
+
+    Two modes, picked via task yaml:
+
+      Full pick-and-place RL (default):
+        - approach_pickable + approach_target + grasp_bonus +
+          success_bonus + action_l2_penalty
+        - lift_bonus weight = 0 (disabled)
+        - Use when the full task — pick, transport, release — must be
+          learned end-to-end.
+
+      Factored pick-only RL:
+        - approach_pickable + grasp_bonus + lift_bonus +
+          action_l2_penalty
+        - approach_target + success_bonus weights = 0 (disabled)
+        - Set termination to ``mdp.pickable_lifted`` instead of
+          ``mdp.object_on_target``. RL ends as soon as the policy has
+          grasped + lifted the pickable; a scripted controller handles
+          the deterministic transport-to-target phase.
+        - Use when the target pose is known at runtime (e.g. fixed vial
+          location) — much shorter training horizon.
+
+    Per-task weight overrides go through the ``rewards:`` block in the
+    task yaml. Use 0.0 to disable a term.
+    """
+
+    approach_pickable = RewTerm(func=mdp.reward_tcp_to_pickable, weight=1.0)
+    approach_target = RewTerm(func=mdp.reward_pickable_to_target, weight=1.0)
+    grasp_bonus = RewTerm(func=mdp.reward_grasp_at_pickable, weight=1.0)
+    lift_bonus = RewTerm(func=mdp.reward_lift_to_height, weight=0.0)
+    success_bonus = RewTerm(func=mdp.reward_object_on_target, weight=50.0)
+    action_l2_penalty = RewTerm(func=mdp.reward_action_penalty, weight=-0.001)
 
 
 @configclass
