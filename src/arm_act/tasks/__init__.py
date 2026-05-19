@@ -91,11 +91,19 @@ def register(force: bool = False) -> None:
         mimic_cfg_cls = build_mimic_env_cfg(env_cfg_cls, spec, f"{prefix}MimicEnvCfg")
         # RL variant: same scene/actions, with a shaped RewardsCfg attached.
         rl_env_cfg_cls = build_env_cfg(spec, f"{prefix}RLEnvCfg", enable_rewards=True)
+        # Vision RL variant: as RL but keeps the wrist_cam alive so a CNN
+        # actor-critic can learn from images. Separate gym id so the two
+        # configs don't collide and so the CLI can pick state-only vs
+        # vision by task name.
+        rl_vision_env_cfg_cls = build_env_cfg(
+            spec, f"{prefix}RLVisionEnvCfg", enable_rewards=True, enable_vision=True,
+        )
 
         globals()[env_cfg_cls.__name__] = env_cfg_cls
         globals()[mimic_env_cls.__name__] = mimic_env_cls
         globals()[mimic_cfg_cls.__name__] = mimic_cfg_cls
         globals()[rl_env_cfg_cls.__name__] = rl_env_cfg_cls
+        globals()[rl_vision_env_cfg_cls.__name__] = rl_vision_env_cfg_cls
 
         gym.register(
             id=spec["task"]["gym_id"],
@@ -126,6 +134,16 @@ def register(force: bool = False) -> None:
                 kwargs={
                     "env_cfg_entry_point": f"arm_act.tasks:{rl_env_cfg_cls.__name__}",
                     "rsl_rl_cfg_entry_point": "arm_act.training.ppo_cfg:DefaultPPORunnerCfg",
+                },
+                disable_env_checker=True,
+            )
+            rl_vision_gym_id = il_gym_id[: -len("-v0")] + "-RL-Vision-v0"
+            gym.register(
+                id=rl_vision_gym_id,
+                entry_point="isaaclab.envs:ManagerBasedRLEnv",
+                kwargs={
+                    "env_cfg_entry_point": f"arm_act.tasks:{rl_vision_env_cfg_cls.__name__}",
+                    "rsl_rl_cfg_entry_point": "arm_act.training.ppo_cfg:VisionPPORunnerCfg",
                 },
                 disable_env_checker=True,
             )

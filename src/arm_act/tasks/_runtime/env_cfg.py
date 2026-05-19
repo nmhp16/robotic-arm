@@ -28,7 +28,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
-from isaaclab.sensors import CameraCfg, FrameTransformerCfg
+from isaaclab.sensors import CameraCfg, FrameTransformerCfg, TiledCameraCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
 from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, RigidBodyPropertiesCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
@@ -46,7 +46,12 @@ from .robot_cfg import build_robot_cfg
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
-def build_env_cfg(spec: dict[str, Any], class_name: str, enable_rewards: bool = False) -> type:
+def build_env_cfg(
+    spec: dict[str, Any],
+    class_name: str,
+    enable_rewards: bool = False,
+    enable_vision: bool = False,
+) -> type:
     """Return a configclass-decorated subclass of PickPlaceEnvCfgBase
     with all task-specific fields baked in from ``spec``.
 
@@ -55,6 +60,10 @@ def build_env_cfg(spec: dict[str, Any], class_name: str, enable_rewards: bool = 
             RL fine-tuning). The IL/oracle/mimic/dagger pipeline does NOT
             need rewards, so this defaults to False to keep those flows
             untouched.
+        enable_vision: when True, keep the wrist_cam alive in the RL env
+            instead of stripping it. Pair with a CNN-based PPO config
+            (VisionPPORunnerCfg). Has no effect when enable_rewards is
+            False (IL path always keeps all cameras).
     """
     from .base_env_cfg import RewardsCfg
 
@@ -64,14 +73,16 @@ def build_env_cfg(spec: dict[str, Any], class_name: str, enable_rewards: bool = 
             _apply_spec(self, spec)
             if enable_rewards:
                 self.rewards = RewardsCfg()
-                _apply_reward_params(self, spec)
+                _apply_reward_params(self, spec, enable_vision=enable_vision)
 
     _Cfg.__name__ = class_name
     _Cfg.__qualname__ = class_name
     return configclass(_Cfg)
 
 
-def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
+def _apply_reward_params(
+    env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any], enable_vision: bool = False
+) -> None:
     """Fill the per-reward-term ``params`` dict from the task spec.
 
     Robot/task agnostic: pulls ``gripper_driver_joint`` and
@@ -132,6 +143,7 @@ def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> 
     # via a non-zero weight in the rewards: block.
     rewards_block = spec.get("rewards") if isinstance(spec.get("rewards"), dict) else {}
     lift_height = float(rewards_block.get("lift_height", 0.10))
+    min_stable_steps = int(rewards_block.get("lift_stable_steps", 10))
     rew.lift_bonus.params = dict(
         ee_frame_cfg=SceneEntityCfg("ee_frame"),
         object_cfg=SceneEntityCfg("pickable"),
@@ -140,12 +152,51 @@ def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> 
         driver_joint=driver_joint,
         closed_threshold=closed_threshold,
     )
+    # Re-wire the lifted-mode reward stack when the task selects
+    # success_termination=lifted. Two changes from the default
+    # (placed-mode) wiring:
+    #
+    # 1. lift_bonus → reward_lift_hold_progress. The default
+    #    reward_lift_to_height fires +1 per step on every step the
+    #    lift condition holds, regardless of stability. PPO reward-
+    #    hacks this by firing-and-dropping repeatedly. The hold-
+    #    progress reward scales with how long the policy holds, so
+    #    a 5-step hold gives 1+2+3+4+5=15 while 5 flicks give 5 —
+    #    the policy is paid more to hold.
+    #
+    # 2. success_bonus → reward_terminal_stable_lift. The default
+    #    success_bonus fires on placement (object_on_target), which
+    #    never happens in lifted mode. Replace it with a one-shot
+    #    bonus on the success step — strong terminal incentive
+    #    that, combined with the small per-step hold-progress
+    #    reward, makes holding strictly better than flicking.
+    success_mode = str(rewards_block.get("success_termination", "placed")).lower()
+    if success_mode == "lifted":
+        rew.lift_bonus.func = mdp.reward_lift_hold_progress
+        rew.lift_bonus.params = dict(
+            ee_frame_cfg=SceneEntityCfg("ee_frame"),
+            object_cfg=SceneEntityCfg("pickable"),
+            lift_height=lift_height,
+            diff_threshold=0.06,
+            driver_joint=driver_joint,
+            closed_threshold=closed_threshold,
+        )
+        rew.success_bonus.func = mdp.reward_terminal_stable_lift
+        rew.success_bonus.params = dict(
+            ee_frame_cfg=SceneEntityCfg("ee_frame"),
+            object_cfg=SceneEntityCfg("pickable"),
+            lift_height=lift_height,
+            diff_threshold=0.06,
+            driver_joint=driver_joint,
+            closed_threshold=closed_threshold,
+            min_stable_steps=min_stable_steps,
+        )
     # action_l2_penalty needs no params.
 
     # Per-task weight overrides from the task yaml. Non-weight keys
     # (lift_height, success_termination) are consumed elsewhere and
     # silently skipped here.
-    NON_WEIGHT_KEYS = {"lift_height", "success_termination"}
+    NON_WEIGHT_KEYS = {"lift_height", "lift_stable_steps", "success_termination"}
     weights = (spec.get("rewards") or {})
     for term_name, w in weights.items():
         if term_name in NON_WEIGHT_KEYS:
@@ -160,27 +211,75 @@ def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> 
             )
         term.weight = float(w)
 
-    # --- Strip cameras + image obs from RL env -------------------------------
-    # The default actor-critic in DefaultPPORunnerCfg is a state-only MLP.
-    # Keeping cameras spawned at RL time costs a CameraCfg per env, which
-    # blows past the GPU's Vulkan descriptor pool (~1024 viewports) when
-    # num_envs is large. Strip them so RL can scale to thousands of envs
-    # the same way locomotion tasks do.
-    # IL flow is unaffected — _apply_reward_params only runs for RL envs.
+    # --- Camera / image-obs handling for RL ----------------------------------
+    # Two modes:
+    #
+    # 1. State-only (enable_vision=False, default): strip ALL cameras and
+    #    image obs. The default actor-critic in DefaultPPORunnerCfg is a
+    #    state-only MLP. Keeping cameras spawned at RL time costs one
+    #    CameraCfg per env (= one Vulkan viewport), which blows past the
+    #    GPU's descriptor pool (~1024 viewports) at large num_envs.
+    #
+    # 2. Vision (enable_vision=True): keep wrist_cam but strip
+    #    table_cam. The CNN actor-critic in VisionPPORunnerCfg reads from
+    #    the wrist_cam to learn vision-conditioned picking. We keep only
+    #    one camera per env to halve the descriptor cost.
     cameras = spec.get("cameras", {}) or {}
-    # Walk the obs terms and unset (set to None on a configclass field is
-    # equivalent to "no term" — the ObservationManager skips Nones cleanly,
-    # but ONLY if the parent group itself isn't None and still has at
-    # least one valid term remaining).
     pol = env_cfg.observations.policy
-    for cam_name in list(cameras.keys()):
+    # Which cameras to strip: ALL in state-only mode; only non-wrist in
+    # vision mode.
+    cams_to_strip = list(cameras.keys()) if not enable_vision else [
+        c for c in cameras if c != "wrist_cam"
+    ]
+    for cam_name in cams_to_strip:
         if hasattr(pol, cam_name) and getattr(pol, cam_name) is not None:
             setattr(pol, cam_name, None)
-        # Detach the camera sensor from the scene (no descriptor cost).
         if hasattr(env_cfg.scene, cam_name) and getattr(env_cfg.scene, cam_name) is not None:
             setattr(env_cfg.scene, cam_name, None)
     if hasattr(pol, "wrist_depth") and pol.wrist_depth is not None:
         pol.wrist_depth = None
+
+    # Vision RL: downsize the surviving wrist_cam from the IL default
+    # 224x224 to 84x84 (Atari-style CNN input). 224x224 is overkill for
+    # PPO + 4-DOF arm and triples the GPU memory / step time.
+    if enable_vision and hasattr(env_cfg.scene, "wrist_cam"):
+        wc = env_cfg.scene.wrist_cam
+        if wc is not None:
+            wc.height = 84
+            wc.width = 84
+        # Disable the ee_frame debug visualization marker. It renders
+        # an XYZ coordinate cross right at the TCP — when the wrist
+        # cam is mounted on the wrist, this cross dominates the frame
+        # in giant primary colors and the actual scene (plant, table)
+        # is hard to see. The state-only PPO didn't care because it
+        # never saw images.
+        if hasattr(env_cfg.scene, "ee_frame") and env_cfg.scene.ee_frame is not None:
+            env_cfg.scene.ee_frame.debug_vis = False
+        # IL adds the wrist_cam ObsTerm to the policy group (where the
+        # state obs also live). For PPO with a CNN actor-critic that
+        # needs to route the image through an encoder, we must move it
+        # to the rgb_camera group so the concatenate_terms=True on
+        # policy doesn't try to stack the 84x84x3 image with the 1D
+        # state obs (which raises a shape mismatch).
+        #
+        # Also swap mdp.image → mdp.image_chw: Isaac Lab returns the
+        # image channels-last (B, H, W, C), but rsl_rl's CNNModel
+        # expects channels-first (B, C, H, W). The CHW wrapper
+        # permutes; without it the CNN's conv math reads the wrong
+        # axis and crashes with "Trying to create tensor with
+        # negative dimension".
+        cam_obs = getattr(pol, "wrist_cam", None)
+        if cam_obs is not None and hasattr(env_cfg.observations, "rgb_camera"):
+            cam_obs.func = mdp.image_chw
+            # Force normalize=True for the CNN path so the image comes
+            # through as float in [-mean, 1-mean] instead of raw uint8.
+            # Conv2d requires float input; otherwise we get the
+            # "Input type (unsigned char) and bias type (float) should
+            # be the same" runtime error.
+            cam_obs.params = dict(cam_obs.params or {})
+            cam_obs.params["normalize"] = True
+            env_cfg.observations.rgb_camera.wrist_cam = cam_obs
+            pol.wrist_cam = None
     # NOTE: leave env_cfg.observations.rgb_camera as the empty
     # configclass group — setting the whole group to None makes
     # ObservationManager dim-summing fail on construction.
@@ -197,8 +296,14 @@ def _apply_reward_params(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> 
     # The MLP actor-critic only reads obs["policy"], so collapse the env
     # to a single group: flatten policy via concatenate_terms=True, and
     # delattr the others so ObservationManager doesn't see them at all.
+    # In vision mode, ALSO keep rgb_camera (single-term group with the
+    # wrist_cam image) — the CNN actor-critic reads it as a 2D obs.
     env_cfg.observations.policy.concatenate_terms = True
-    for extra_group in ("rgb_camera", "subtask_terms"):
+    extras_to_strip = ("rgb_camera", "subtask_terms") if not enable_vision else ("subtask_terms",)
+    if enable_vision and hasattr(env_cfg.observations, "rgb_camera"):
+        # rgb_camera stays — flatten its terms into a single tensor too.
+        env_cfg.observations.rgb_camera.concatenate_terms = True
+    for extra_group in extras_to_strip:
         if hasattr(env_cfg.observations, extra_group):
             try:
                 delattr(env_cfg.observations, extra_group)
@@ -442,6 +547,11 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     success_mode = str(rewards_block.get("success_termination", "placed")).lower()
     if success_mode == "lifted":
         lift_height = float(rewards_block.get("lift_height", 0.10))
+        # min_stable_steps blocks the 1-frame-teleport exploit when
+        # kinematic_attach is on. 10 steps ≈ 0.2 s at typical sim dt;
+        # long enough that the policy must actually hold the lift,
+        # short enough that it doesn't penalize a real grasp.
+        min_stable_steps = int(rewards_block.get("lift_stable_steps", 10))
         env_cfg.terminations.success.func = mdp.pickable_lifted
         env_cfg.terminations.success.params = {
             "ee_frame_cfg": SceneEntityCfg("ee_frame"),
@@ -450,7 +560,11 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
             "diff_threshold": 0.06,
             "driver_joint": driver_joint,
             "closed_threshold": closed_threshold,
+            "min_stable_steps": min_stable_steps,
         }
+        # success_bonus rewire for lifted mode happens in
+        # _apply_reward_params (only runs when rewards are attached for
+        # RL envs).
     elif success_mode == "placed":
         env_cfg.terminations.success.params = dict(sub.place.params)
     else:
@@ -589,7 +703,13 @@ def _build_camera_cfg(cam_name: str, cam: dict) -> CameraCfg:
     if cam.get("depth"):
         data_types.append("distance_to_image_plane")
 
-    return CameraCfg(
+    # Use TiledCamera if this is the wrist_cam (the one vision-RL reads).
+    # TiledCamera renders ALL envs into one big tiled viewport (1 Vulkan
+    # descriptor for thousands of envs), as opposed to plain CameraCfg
+    # which spawns one viewport per env and blows the descriptor pool
+    # past ~64 envs.
+    cls = TiledCameraCfg if cam_name == "wrist_cam" else CameraCfg
+    return cls(
         prim_path=prim_path,
         update_period=0.0,
         height=int(cam.get("height", 224)),

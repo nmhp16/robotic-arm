@@ -20,11 +20,48 @@ from isaaclab.envs.mdp import (  # noqa: F401  re-exported for env cfg
     root_height_below_minimum,
     time_out,
 )
+from isaaclab.envs.mdp import image as _image_hwc
+
+# Note: image_chw is defined AFTER SceneEntityCfg import (further down)
+# because its default args reference SceneEntityCfg.
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.sensors import Camera, FrameTransformer
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
+
+
+def image_chw(
+    env,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
+    data_type: str = "rgb",
+    convert_perspective_to_orthogonal: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """Wrapper around ``isaaclab.envs.mdp.image`` that returns the image
+    in channels-first ``(B, C, H, W)`` layout instead of Isaac Lab's
+    default channels-last ``(B, H, W, C)``.
+
+    rsl_rl's CNN model assumes channels-first input — it reads
+    ``obs.shape[1]`` as channels and ``obs.shape[2:4]`` as (H, W). With
+    channels-last from Isaac Lab the conv math goes negative on the
+    width axis (``floor((3-8)/4 + 1) = -1``) and the MLP head crashes
+    with ``Trying to create tensor with negative dimension``.
+
+    Signature mirrors ``isaaclab.envs.mdp.image`` explicitly so Isaac
+    Lab's ObservationManager parameter introspection sees the named
+    kwargs (a ``*args, **kwargs`` wrapper appears as one parameter
+    called ``kwargs`` and fails the ObsTerm contract).
+    """
+    img = _image_hwc(
+        env,
+        sensor_cfg=sensor_cfg,
+        data_type=data_type,
+        convert_perspective_to_orthogonal=convert_perspective_to_orthogonal,
+        normalize=normalize,
+    )
+    # Isaac Lab returns (B, H, W, C); rsl_rl wants (B, C, H, W).
+    return img.permute(0, 3, 1, 2).contiguous()
 
 
 def _gripper_drive_pos(env: ManagerBasedRLEnv, joint_name: str) -> torch.Tensor | None:
@@ -405,12 +442,19 @@ def pickable_lifted(
     diff_threshold: float = 0.06,
     driver_joint: str = "finger_left_joint",
     closed_threshold: float = 0.02,
+    min_stable_steps: int = 10,
 ) -> torch.Tensor:
     """Termination: True when the policy has grasped + lifted the pickable
-    by ``lift_height`` metres. Drop this as the success terminator on
-    factored pick-only RL so episodes end as soon as the pickable is
-    held aloft, freeing the scripted transport phase to take over."""
-    return reward_lift_to_height(
+    by ``lift_height`` metres for ``min_stable_steps`` *consecutive* env
+    steps. The stability counter blocks the 1-frame-overshoot exploit
+    that a kinematic_attach env is vulnerable to — the policy can no
+    longer trigger success by briefly teleporting the welded payload
+    past the threshold; it has to hold it there.
+
+    Reset behavior: counter is per-env and is zeroed on any step where
+    the lift+grasp condition fails. So a momentary slip resets the
+    countdown."""
+    instantaneous = reward_lift_to_height(
         env,
         ee_frame_cfg=ee_frame_cfg,
         object_cfg=object_cfg,
@@ -419,3 +463,88 @@ def pickable_lifted(
         driver_joint=driver_joint,
         closed_threshold=closed_threshold,
     ).bool()
+    attr = "_stable_lift_counter"
+    if not hasattr(env, attr) or getattr(env, attr).shape[0] != env.num_envs:
+        setattr(env, attr, torch.zeros(env.num_envs, dtype=torch.long, device=env.device))
+    counter: torch.Tensor = getattr(env, attr)
+    counter.mul_(instantaneous.long())
+    counter.add_(instantaneous.long())
+    return counter >= min_stable_steps
+
+
+def reward_lift_hold_progress(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    lift_height: float = 0.10,
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Per-step shaping reward that scales with how long the policy has
+    been continuously holding the lift. Returns ``counter + 1`` on
+    steps where the lift condition holds, where ``counter`` is the
+    stable-lift counter maintained by ``pickable_lifted``.
+
+    Critically, this *does not* reward firing the lift condition
+    repeatedly — only holding it longer. A single 1-step lift gives 1
+    reward total; five flicks give 1+1+1+1+1=5 total; a 5-step
+    stable hold gives 1+2+3+4+5=15 total. Combined with the terminal
+    success_bonus (which fires once at step 5 of a stable hold), the
+    policy is incentivized to find AND maintain the hold.
+
+    Reads the counter maintained by ``pickable_lifted``. Returns 0 if
+    that counter doesn't exist yet (first step of training)."""
+    instantaneous = reward_lift_to_height(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        lift_height=lift_height,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    ).bool()
+    counter = getattr(env, "_stable_lift_counter", None)
+    if counter is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    # counter holds the previous step's value at reward-eval time;
+    # add 1 for the current step (matches what the terminator will
+    # set the counter to right after).
+    return ((counter + 1) * instantaneous.long()).to(torch.float32)
+
+
+def reward_terminal_stable_lift(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    lift_height: float = 0.10,
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+    min_stable_steps: int = 5,
+) -> torch.Tensor:
+    """+1 only on the step where ``pickable_lifted`` would terminate the
+    episode (counter has just reached ``min_stable_steps`` for the first
+    time). Use this as a one-shot terminal bonus paired with the
+    ``pickable_lifted`` terminator — gives the policy a strong terminal
+    incentive without per-step reward farming.
+
+    Timing: Isaac Lab evaluates rewards BEFORE terminations, so the
+    counter at reward-time still reflects the previous step's value.
+    The success step is the one where counter is at
+    ``min_stable_steps - 1`` AND the lift condition holds — that's the
+    step the terminator will fire on. Returning 1 here gives 1 reward
+    on the success step and 0 everywhere else."""
+    instantaneous = reward_lift_to_height(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        lift_height=lift_height,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    ).bool()
+    counter = getattr(env, "_stable_lift_counter", None)
+    if counter is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    return ((counter == min_stable_steps - 1) & instantaneous).to(torch.float32)

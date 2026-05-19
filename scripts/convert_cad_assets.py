@@ -55,30 +55,31 @@ ASSETS = [
     {
         "stl": "leaf_plant",
         "asset_dir": "leaf_plant",
-        # Friction-grip B-iter1 (2026-05-18): drop mass 4x (less inertial
-        # slip during MOVE/ALIGN), raise μ, restore stem-cylinder collision
-        # at grasp height. Pair with use_kinematic_attach=false in the task
-        # yaml and the tweezer stiffness bump in
-        # assets/t3_401_tweezer/config.yaml.
-        "mass": 0.0005,
+        "mass": 0.002,
         "kinematic": False,
         "scale": 0.001,
         "collider": "convex_decomposition",
-        "friction": (8.0, 6.0, 0.0),
+        "friction": (3.0, 2.5, 0.0),
+        # Saturated green so the policy's vision backbone has a strong colour
+        # signal to localize the pickable against the grey table/vial/tray.
         "color_rgba": (0.15, 0.75, 0.20, 1.0),
-        # Stem collision at the grasp height (z=0.04–0.07). Leaves
-        # (z=0.105..0.12) intentionally have no collision to avoid the
-        # rigid-leaf interference failure mode flagged by the
-        # friction_grip_attempted memory.
+        # Tiny stub collision at the plant base. The full 80 mm-tall stem
+        # collision used to overlap with the wrist (link_4) cylinder during
+        # DESCEND, stalling the IK at z~0.106. Kinematic_attach captures the
+        # plant via root-to-TCP distance, not via contact, so a small base
+        # stub is sufficient — the tweezer can descend freely past the
+        # visual stem without colliding with anything.
+        # NOTE: kinematic_attach is the right abstraction for real tweezer
+        # grip — PhysX rigid contact can't model compliant tweezer tips,
+        # so we use the welded attach as the sim-correct approximation of
+        # "real tweezer reliably grips when closed near object." See
+        # friction_grip_attempted memory for 2026-05-15/05-18 attempts to
+        # do this with real friction; all gave 0%.
         "collision_override": (
-            # B-iter2 (2026-05-18): r=2mm stem so the tweezer fingers (now
-            # with 15mm travel each) can actually clamp around it.
-            # Tradeoff per memory: smaller contact patch, but compensated
-            # by μ=8.0 and heavier clamp from the higher tweezer stiffness.
             '<collision>\n'
-            '      <origin xyz="0 0 0.055" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.005" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder length="0.030" radius="0.0020"/>\n'
+            '        <cylinder length="0.010" radius="0.0040"/>\n'
             '      </geometry>\n'
             '    </collision>'
         ),

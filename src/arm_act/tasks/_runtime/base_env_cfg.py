@@ -87,6 +87,13 @@ class ObservationsCfg:
 
     @configclass
     class RGBCameraPolicyCfg(ObsGroup):
+        # Empty by default — IL pipelines add the camera obs to the
+        # `policy` group instead. Vision RL re-routes the wrist_cam
+        # obs here via env_cfg's _apply_reward_params(enable_vision=True)
+        # so the CNN actor-critic can route the 2D image through its
+        # encoder without colliding with the 1D state obs.
+        wrist_cam: ObsTerm | None = None
+
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False

@@ -55,20 +55,15 @@ robot:
   arm_joint_jitter_std: 0.02
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0
-  # B-iter2: command 12mm close. URDF travel limit is 15mm; the new
-  # r=2mm stem stops the fingers at joint_pos ≈ 3mm. Residual stiffness
-  # force = 800 * (0.012 - 0.003) = 7.2 N clamping the stem. With
-  # closed_threshold=0.0025, the grasp check fires once the fingers are
-  # past the open position.
-  gripper_close_m: 0.012
+  gripper_close_m: 0.005
   gripper_closed_threshold: 0.0025
   gripper_driver_joint: finger_left_joint
-  # Friction-grip B-iter1 (2026-05-18): try the no-weld path again with
-  # a tuned plant (mass 0.5g, μ=8.0/6.0, stem cylinder r=5mm) and
-  # higher-stiffness tweezer (800 N·m/rad). If oracle smoke is <20%,
-  # revert to use_kinematic_attach: true and add a tweezer fingertip
-  # pad. See friction_grip_attempted.md for prior data.
-  use_kinematic_attach: false
+  # kinematic_attach (default on) is the sim-correct approximation for
+  # real tweezer grip — PhysX rigid contact between thin tweezer tips
+  # and thin stem can't model the compliant patch contact that holds
+  # real grips. 5 iterations of friction-grip tuning (memory iters
+  # 1-3 on 2026-05-15, B-iter1..iter3d on 2026-05-18) all gave 0-4%
+  # success. See friction_grip_attempted.md.
 
 # --- Scene objects ----------------------------------------------------------
 # plant: leaf_plant USD. Spawns above a kinematic "tray" pad — gives it
@@ -147,7 +142,15 @@ cameras:
     clipping_range: [0.1, 4.0]
   wrist_cam:
     parent: tool0_aligned
-    pos: [0.05, 0.0, 0.18]
+    # FIX 2026-05-18 (v2): the previous "−Z = up" mount placed the
+    # camera INSIDE the link_4 housing (verified via render: showed
+    # the inside of the cylinder + back of tweezer). New mount: 5 cm
+    # SIDEWAYS in +X (clear of the body), at z=0 (same height as the
+    # tool flange), looking DOWN +Z toward the workspace. The tweezer
+    # extends straight down from tool0_aligned, so it'll be visible
+    # at the LEFT EDGE of the frame and the plant will be in the
+    # center-right when the arm is over it.
+    pos: [0.05, 0.0, 0.0]
     rot: [1.0, 0.0, 0.0, 0.0]
     focal_length: 14.0
     horizontal_aperture: 20.955
@@ -264,11 +267,26 @@ rewards:
                                  # a 300-step timeout with 150 grasping steps
                                  # outweighs a 50-step success episode (verified
                                  # by reward-hacking observed at iter 40-70).
-  lift_bonus: 50.0               # only fires on success termination (one step
-                                 # then env resets) — true terminal bonus
-  success_bonus: 0.0             # no end-to-end placement check during RL
+  lift_bonus: 5.0                # Wired to reward_lift_hold_progress
+                                 # in env_cfg.py for lifted mode —
+                                 # gives (counter+1)*5 per step while
+                                 # holding. Flicking 5 times = 5*5=25,
+                                 # holding 5 steps = (1+2+3+4+5)*5 = 75.
+                                 # Holding always pays more per same
+                                 # number of "lift hits".
+  success_bonus: 500.0           # One-shot terminal bonus on the
+                                 # stable-lift success step. Combined
+                                 # with the hold-progress shaping, the
+                                 # policy gets 75 + 500 = 575 for a
+                                 # successful hold vs. ~25 for
+                                 # flicking — terminal pays 20×.
   action_l2_penalty: -0.001
   lift_height: 0.10              # 10 cm above spawn; clears the vial rim
+  lift_stable_steps: 5           # require lift to hold for 5 consecutive
+                                 # steps (~0.1 s). Blocks the 1-frame
+                                 # teleport exploit while staying easy
+                                 # enough for PPO to learn within 200
+                                 # iters.
   success_termination: lifted    # episode ends on grasp+lift
 
 # --- Data paths + checkpoint locations -------------------------------------
