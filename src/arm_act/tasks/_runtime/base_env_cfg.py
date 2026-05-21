@@ -64,8 +64,25 @@ class ActionsCfg:
 
 @configclass
 class ObservationsCfg:
-    """Default observation groups. The builder also adds task-specific
-    image obs (table_cam / wrist_cam) onto the policy group."""
+    """Observation groups.
+
+    Two layouts coexist on the same env_cfg:
+
+    - **IL pipelines** (oracle, mimic, dagger, ACT, SmolVLA) read the
+      ``policy`` group — robot state + object ground truth bundled
+      together, matching the demo HDF5 schema.
+
+    - **RL pipelines** (``Isaac-…-RL-v0`` / ``-RL-Vision-v0``) use the
+      asymmetric ``proprio`` + ``privileged`` split. The actor sees only
+      ``proprio`` (deployable on the real robot); the critic sees
+      ``proprio + privileged`` (sim ground truth, training-time-only,
+      stable value learning). The ``_apply_reward_params`` helper strips
+      ``policy`` and instantiates the split for RL envs only.
+
+    The split exists because the bundled ``policy`` group leaks object
+    ground truth to the actor — that's fine for IL (demos record what
+    the oracle saw) but fatal for sim-to-real RL: the real robot has no
+    plant-pose sensor."""
 
     @configclass
     class PolicyCfg(ObsGroup):
@@ -84,6 +101,53 @@ class ObservationsCfg:
         def __post_init__(self):
             self.enable_corruption = False
             self.concatenate_terms = False
+
+    @configclass
+    class ProprioCfg(ObsGroup):
+        """Robot-state-only obs (deployable on the real arm).
+
+        Everything in this group can be read from real-robot encoders +
+        forward kinematics + a known target pose at machine startup. The
+        RL actor reads ONLY this group, so the trained policy can be
+        deployed without any external object-perception system.
+
+        ``target_pos`` is included because real fixtures have known fixed
+        poses (e.g. the vial slot in a holder rack) — that's not sim
+        cheating, it's calibrated workcell geometry."""
+
+        actions = ObsTerm(func=mdp.last_action)
+        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
+        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
+        eef_pos = ObsTerm(func=mdp.ee_frame_pos)
+        eef_quat = ObsTerm(func=mdp.ee_frame_quat)
+        gripper_pos = ObsTerm(func=mdp.gripper_pos)
+        target_pos = ObsTerm(func=mdp.object_position)
+
+        def __post_init__(self):
+            # enable_corruption=True lets per-term ``noise`` configs fire.
+            # We attach GaussianNoiseCfg in env_cfg builder for sim-to-real
+            # robustness against real encoder noise.
+            self.enable_corruption = True
+            self.concatenate_terms = True
+
+    @configclass
+    class PrivilegedCfg(ObsGroup):
+        """Sim-only ground-truth obs for the asymmetric critic.
+
+        The pickable's pose is sampled from PhysX state — there's no
+        equivalent measurement on the real robot. Including it in the
+        critic obs accelerates value-function learning (the critic
+        always knows exactly where the plant is, regardless of how well
+        the actor's vision encoder is doing) without contaminating the
+        deployable actor."""
+
+        object = ObsTerm(func=mdp.object_obs)
+        pickable_pos = ObsTerm(func=mdp.object_position)
+        pickable_quat = ObsTerm(func=mdp.object_orientation)
+
+        def __post_init__(self):
+            self.enable_corruption = False
+            self.concatenate_terms = True
 
     @configclass
     class RGBCameraPolicyCfg(ObsGroup):
@@ -109,6 +173,11 @@ class ObservationsCfg:
             self.concatenate_terms = False
 
     policy: PolicyCfg = PolicyCfg()
+    # proprio + privileged default to None; the RL env_cfg builder
+    # instantiates them and strips `policy`. IL paths leave them None
+    # so ObservationManager skips them entirely.
+    proprio: ProprioCfg | None = None
+    privileged: PrivilegedCfg | None = None
     rgb_camera: RGBCameraPolicyCfg = RGBCameraPolicyCfg()
     subtask_terms: SubtaskCfg = SubtaskCfg()
 

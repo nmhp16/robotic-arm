@@ -38,6 +38,8 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 
+from isaaclab.utils.noise import GaussianNoiseCfg
+
 from . import events as events_mod
 from . import mdp
 from .base_env_cfg import PickPlaceEnvCfgBase
@@ -133,7 +135,13 @@ def _apply_reward_params(
     rew.grasp_bonus.params = dict(
         ee_frame_cfg=SceneEntityCfg("ee_frame"),
         object_cfg=SceneEntityCfg("pickable"),
-        diff_threshold=0.06,
+        # Tighter than the historical 0.06 — at 0.03 (3 cm) the grasp
+        # bonus only fires inside / barely outside kin_attach's 2 cm
+        # capture range, so the policy can't park outside the capture
+        # zone and farm +reward by closing-and-camping. Tasks that
+        # still want the looser bonus can override via the rewards
+        # block (not currently parsed; would need extra plumbing).
+        diff_threshold=0.03,
         driver_joint=driver_joint,
         closed_threshold=closed_threshold,
     )
@@ -270,7 +278,14 @@ def _apply_reward_params(
         # negative dimension".
         cam_obs = getattr(pol, "wrist_cam", None)
         if cam_obs is not None and hasattr(env_cfg.observations, "rgb_camera"):
-            cam_obs.func = mdp.image_chw
+            # When the task yaml has wrist_cam.depth: true, the camera
+            # renders both rgb + distance_to_image_plane and we route a
+            # 4-channel RGBD image to the CNN — depth gives the actor an
+            # unambiguous "plant is X mm below" signal that pure RGB
+            # struggles to extract from a dark workspace. Pure RGB path
+            # (image_chw) is kept for tasks without depth.
+            has_depth = bool(cameras.get("wrist_cam", {}).get("depth"))
+            cam_obs.func = mdp.image_rgbd_chw if has_depth else mdp.image_chw
             # Force normalize=True for the CNN path so the image comes
             # through as float in [-mean, 1-mean] instead of raw uint8.
             # Conv2d requires float input; otherwise we get the
@@ -284,32 +299,54 @@ def _apply_reward_params(
     # configclass group — setting the whole group to None makes
     # ObservationManager dim-summing fail on construction.
 
-    # --- Reduce obs to ONE group for rsl_rl ---------------------------------
-    # IL flow uses three groups: "policy" (state), "rgb_camera" (images,
-    # added by the camera loop earlier), "subtask_terms" (grasp/place
-    # booleans). rsl_rl's runner does ``check_nan(obs)`` which iterates
-    # obs.items() and expects each value to be a leaf Tensor. Multi-term
-    # groups without concatenation come through as nested TensorDicts;
-    # empty groups come through as empty TensorDicts — neither survives
-    # ``torch.isnan``.
+    # --- Asymmetric actor-critic obs split for RL ---------------------------
+    # Replace the bundled IL `policy` group with two RL-specific groups:
     #
-    # The MLP actor-critic only reads obs["policy"], so collapse the env
-    # to a single group: flatten policy via concatenate_terms=True, and
-    # delattr the others so ObservationManager doesn't see them at all.
-    # In vision mode, ALSO keep rgb_camera (single-term group with the
-    # wrist_cam image) — the CNN actor-critic reads it as a 2D obs.
-    env_cfg.observations.policy.concatenate_terms = True
-    extras_to_strip = ("rgb_camera", "subtask_terms") if not enable_vision else ("subtask_terms",)
-    if enable_vision and hasattr(env_cfg.observations, "rgb_camera"):
-        # rgb_camera stays — flatten its terms into a single tensor too.
+    #   proprio    — robot state + known fixed target_pos. The ACTOR reads
+    #                only this (+ rgb_camera in vision mode), so the policy
+    #                is deployable on the real arm.
+    #   privileged — object ground-truth pose. Only the CRITIC reads this;
+    #                gives the value head stable supervision while keeping
+    #                the actor sim-to-real-clean.
+    #
+    # See ppo_cfg.py's `obs_groups` dict for the actor/critic wiring.
+    from .base_env_cfg import ObservationsCfg as _Obs
+    obs = env_cfg.observations
+    obs.proprio = _Obs.ProprioCfg()
+    obs.privileged = _Obs.PrivilegedCfg()
+    obs.proprio.gripper_pos.params = {"driver_joint": driver_joint}
+    obs.proprio.target_pos.params = {"object_cfg": SceneEntityCfg("target")}
+    obs.privileged.object.params = {
+        "object_cfg": SceneEntityCfg("pickable"),
+        "target_cfg": SceneEntityCfg("target"),
+        "ee_frame_cfg": SceneEntityCfg("ee_frame"),
+    }
+    obs.privileged.pickable_pos.params = {"object_cfg": SceneEntityCfg("pickable")}
+    obs.privileged.pickable_quat.params = {"object_cfg": SceneEntityCfg("pickable")}
+
+    # Per-term gaussian noise on the proprio side — calibrated against real
+    # encoder/IK error budgets. Values are SI units (radians for revolute
+    # joints, meters for prismatic / EE pose). Action noise is handled
+    # separately by the action manager (not implemented here yet).
+    obs.proprio.joint_pos.noise = GaussianNoiseCfg(mean=0.0, std=0.005)
+    obs.proprio.joint_vel.noise = GaussianNoiseCfg(mean=0.0, std=0.01)
+    obs.proprio.eef_pos.noise = GaussianNoiseCfg(mean=0.0, std=0.002)
+    obs.proprio.eef_quat.noise = GaussianNoiseCfg(mean=0.0, std=0.005)
+    obs.proprio.gripper_pos.noise = GaussianNoiseCfg(mean=0.0, std=0.0005)
+
+    # Strip the legacy bundled groups. rsl_rl's runner does check_nan(obs)
+    # which expects every obs entry to be a leaf Tensor; removing unused
+    # groups keeps the obs dict clean for the runner's iteration.
+    extras_to_strip = ["policy", "subtask_terms"]
+    if not enable_vision:
+        extras_to_strip.append("rgb_camera")
+    else:
         env_cfg.observations.rgb_camera.concatenate_terms = True
     for extra_group in extras_to_strip:
         if hasattr(env_cfg.observations, extra_group):
             try:
                 delattr(env_cfg.observations, extra_group)
             except AttributeError:
-                # configclass may not allow delattr; fall back to clearing
-                # all ObsTerm fields so the group renders as empty obs.
                 grp = getattr(env_cfg.observations, extra_group)
                 if grp is not None:
                     import dataclasses as _dc
@@ -355,7 +392,23 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     ee_body: str = str(robot_cfg.get("ee_body", "tool0_aligned"))
 
     # --- Robot + ee frame ---------------------------------------------------
-    env_cfg.scene.robot = build_robot_cfg(robot_cfg["type"]).replace(prim_path="{ENV_REGEX_NS}/Robot")
+    # robot.init_joint_pos: optional per-task override of the articulation's
+    # home joint positions. Used by RL tasks that want the arm to spawn near
+    # the workspace (e.g. "hover above the vial") instead of the default
+    # all-zeros home pose, so the policy only has to learn the precision
+    # pick-and-lift rather than the gross approach. arm_joint_jitter_std
+    # still adds gaussian noise around these values per-reset.
+    robot_art = build_robot_cfg(robot_cfg["type"]).replace(prim_path="{ENV_REGEX_NS}/Robot")
+    init_overrides = robot_cfg.get("init_joint_pos") or {}
+    if init_overrides:
+        merged = {
+            **robot_art.init_state.joint_pos,
+            **{k: float(v) for k, v in init_overrides.items()},
+        }
+        robot_art = robot_art.replace(
+            init_state=robot_art.init_state.replace(joint_pos=merged)
+        )
+    env_cfg.scene.robot = robot_art
 
     marker_cfg = FRAME_MARKER_CFG.copy()
     marker_cfg.markers["frame"].scale = (0.05, 0.05, 0.05)

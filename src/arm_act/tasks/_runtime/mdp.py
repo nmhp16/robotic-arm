@@ -64,6 +64,55 @@ def image_chw(
     return img.permute(0, 3, 1, 2).contiguous()
 
 
+def image_rgbd_chw(
+    env,
+    sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
+    data_type: str = "rgb",            # ignored; signature matches image_chw
+    convert_perspective_to_orthogonal: bool = False,
+    normalize: bool = True,
+) -> torch.Tensor:
+    """RGB + depth concatenated along channel dim → ``(B, 4, H, W)``.
+
+    Depth is clamped to ``[0.02, 0.5]`` m and linearly normalized to
+    ``[0, 1]``. That range covers the wrist-cam's reachable workspace
+    (tool flange z ≈ 0.27, table at z ≈ 0.04, so depth from cam is
+    roughly 0.05–0.25 m for objects on the table) with a margin on
+    each side. inf-depth pixels (sky / open space) are mapped to 0 by
+    Isaac Lab's normalization (see ``isaaclab.envs.mdp.image`` docstring),
+    so after clamp+rescale they end up at 0 — the policy reads "very
+    close" rather than "infinitely far". Acceptable: those pixels look
+    away from the workspace anyway.
+
+    The ``data_type`` arg is ignored. It's kept so this function is a
+    drop-in replacement for ``image_chw`` wherever the ObsTerm is wired:
+    the env_cfg builder swaps ``cam_obs.func = mdp.image_rgbd_chw`` and
+    nothing else needs to change. The ``normalize`` flag is honored for
+    the RGB half only; depth has its own fixed-range normalization.
+    """
+    rgb = image_chw(
+        env,
+        sensor_cfg=sensor_cfg,
+        data_type="rgb",
+        convert_perspective_to_orthogonal=convert_perspective_to_orthogonal,
+        normalize=normalize,
+    )
+    depth_hwc = _image_hwc(
+        env,
+        sensor_cfg=sensor_cfg,
+        data_type="distance_to_image_plane",
+        convert_perspective_to_orthogonal=False,
+        normalize=True,  # Isaac Lab maps inf → 0
+    )
+    # Squeeze the trailing channel dim (depth comes in as (B, H, W, 1) or
+    # (B, H, W) depending on Isaac Lab version) and re-introduce as channel-0.
+    if depth_hwc.dim() == 4 and depth_hwc.shape[-1] == 1:
+        depth_hwc = depth_hwc.squeeze(-1)
+    depth = depth_hwc.unsqueeze(1)  # (B, 1, H, W)
+    depth = depth.clamp(min=0.02, max=0.5)
+    depth = (depth - 0.02) / (0.5 - 0.02)
+    return torch.cat([rgb, depth.to(rgb.dtype)], dim=1).contiguous()
+
+
 def _gripper_drive_pos(env: ManagerBasedRLEnv, joint_name: str) -> torch.Tensor | None:
     """Driver-joint position per env, shape (N,). None if the joint is missing."""
     robot: Articulation = env.scene["robot"]
@@ -300,22 +349,38 @@ def reward_tcp_to_pickable(
     env: ManagerBasedRLEnv,
     ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
     object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
-    driver_joint: str = "finger_left_joint",
-    closed_threshold: float = 0.02,
+    driver_joint: str = "finger_left_joint",  # kept for signature compat
+    closed_threshold: float = 0.02,            # kept for signature compat
 ) -> torch.Tensor:
-    """Negative xy distance between TCP and pickable. Active only when the
-    gripper is OPEN (i.e. the policy is in approach phase). Negative dist
-    means the closer the better; once gripper closes this becomes ~0 so it
-    doesn't fight the next phase."""
+    """Negative xy distance between TCP and pickable, every step.
+
+    Earlier versions gated this by an ``open_mask`` (only fire when the
+    gripper is open), with the intent of not fighting the grasp phase.
+    That gate turned out to be a degenerate exploit: PPO discovered it
+    could close the gripper early to zero out the negative approach
+    reward — observed on 2026-05-20 in v4 (approach dropped 100× in
+    25 iters from -0.0229 to -0.0002 while action movement stayed
+    constant; std + reward both collapsed toward the no-approach
+    minimum). Removing the gate forces the policy to actually approach.
+
+    With kinematic_attach enabled (the default), the plant welds to the
+    TCP on grasp so plant_pos = TCP_pos and dist→0 naturally — no need
+    for a manual mask. ``driver_joint`` and ``closed_threshold`` are
+    kept in the signature so the env_cfg builder's params dict doesn't
+    need a special case.
+
+    The distance is computed in 3D, not just xy. The xy-only version
+    plateaued the policy at TCP z = home pose z (0.22 m) with no
+    gradient pushing it to descend toward the plant at z ≈ 0.04 m —
+    150 iters of v5 training showed xy distance shrinking but no
+    plant interaction. Including z gives the actor a clear "descend
+    AND approach" signal. After kinematic_attach welds the plant to
+    the TCP, dz → 0 naturally so the LIFT phase isn't fought."""
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
     obj: RigidObject = env.scene[object_cfg.name]
-    diff = obj.data.root_pos_w[:, :2] - ee_frame.data.target_pos_w[:, 0, :2]
+    diff = obj.data.root_pos_w[:, :3] - ee_frame.data.target_pos_w[:, 0, :3]
     dist = torch.linalg.vector_norm(diff, dim=1)
-    gripper_pos = _gripper_drive_pos(env, driver_joint)
-    if gripper_pos is None:
-        return -dist
-    open_mask = (gripper_pos < closed_threshold).to(dist.dtype)
-    return -dist * open_mask
+    return -dist
 
 
 def reward_pickable_to_target(

@@ -48,14 +48,22 @@ class DefaultPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "arm_act_rl"            # subdir under runner.log_dir
     empirical_normalization = False           # let RslRl normalize obs
 
-    # The env exposes three obs groups: "policy" (state), "rgb_camera"
-    # (always empty for RL — see _apply_reward_params), and
-    # "subtask_terms" (grasp/place booleans). The MLP actor-critic uses
-    # only the state vector. If you switch to a CNN actor later, add
-    # "rgb_camera" to the actor's list and re-enable image obs.
+    # Asymmetric actor-critic. The RL env_cfg builder
+    # (_apply_reward_params) replaces the bundled IL `policy` group with
+    # two RL-specific groups:
+    #
+    #   proprio    — robot encoders + FK + known target pose. Deployable
+    #                on the real arm. Read by the ACTOR.
+    #   privileged — sim ground-truth object pose. Read ONLY by the
+    #                CRITIC so the value function has stable supervision
+    #                while the deployable actor stays sim-to-real clean.
+    #
+    # If you flip back to the symmetric layout (actor sees everything),
+    # set both lists to ["proprio", "privileged"] — but then the policy
+    # is no longer deployable.
     obs_groups = {
-        "actor": ["policy"],
-        "critic": ["policy"],
+        "actor": ["proprio"],
+        "critic": ["proprio", "privileged"],
     }
 
     # --- policy network ---------------------------------------------------
@@ -105,13 +113,14 @@ class VisionPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     experiment_name = "arm_act_rl_vision"
     empirical_normalization = False
 
-    # Two obs groups in the vision env: "policy" (proprio state) and
-    # "rgb_camera" (wrist_cam image). rsl_rl's CNNModel will route the
-    # 2D obs through a CNN encoder, the 1D obs straight to the MLP,
-    # then concat the encoder output with the 1D obs for the MLP head.
+    # Asymmetric vision actor-critic. See DefaultPPORunnerCfg's obs_groups
+    # comment for the rationale. The actor gets only deployable signals
+    # (proprio + camera); the critic gets the privileged object ground
+    # truth on top so the value function has accurate supervision during
+    # PPO updates without leaking to the deployable actor.
     obs_groups = {
-        "actor": ["policy", "rgb_camera"],
-        "critic": ["policy", "rgb_camera"],
+        "actor": ["proprio", "rgb_camera"],
+        "critic": ["proprio", "privileged", "rgb_camera"],
     }
 
     # --- CNN encoder + MLP head -------------------------------------------
@@ -155,7 +164,13 @@ class VisionPPORunnerCfg(RslRlOnPolicyRunnerCfg):
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.01,
+        # entropy_coef 0.005 — HALF the default. The v3 run (entropy=0.03,
+        # RGB-only, randomized spawn) ran the opposite failure: action_std
+        # ran away to NaN by iter 784 because the dense reward couldn't
+        # compete with the entropy bonus. v4 mitigates that on three
+        # axes: RGBD obs (stronger spatial signal), fixed plant spawn
+        # (no translation-invariance burden), and lower entropy here.
+        entropy_coef=0.005,
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=3.0e-4,

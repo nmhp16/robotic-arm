@@ -40,6 +40,19 @@ robot:
   gripper_close_m: 0.005
   gripper_closed_threshold: 0.0025
   gripper_driver_joint: finger_left_joint
+  # Init pose: home (all-zeros) — TCP ends up at world (~0.4, 0, 0.22),
+  # 9 cm horizontal from the vial center and looking down. This is the
+  # same "above the workspace" start that gave put_plant_back its 98%
+  # vision run; the wrist-cam sees the vial+plant from above with
+  # enough scene context for the CNN to extract a learning signal.
+  #
+  # An earlier "hover directly above vial" init pose
+  # (joint_1=0.554, joint_2=-1.381, joint_3=0.08) made the wrist-cam
+  # frame near-monochrome dark at reset — the CNN had no signal and
+  # 495 PPO iters showed zero progress. If you want a closer start,
+  # leave joint_3 at ~0 (TCP high) so the wrist-cam keeps a wide view
+  # of the workspace.
+  # init_joint_pos: {}
 
 # --- Scene objects ----------------------------------------------------------
 # vial: kinematic, sits on the table directly. Collision disabled so
@@ -56,9 +69,14 @@ objects:
     scale: [1.0, 1.0, 1.0]
     kinematic: true
     collision: false                          # cosmetic; plant interacts with table
+    # Fixed spawn (no xy randomization) for vision-PPO cold start. With
+    # randomized 2cm × 2cm spawns the CNN had to learn translation
+    # invariance from scratch; fixing the position lets the policy
+    # memorize a single trajectory first. Re-add randomization (and
+    # train DR + jitter) once the base policy is converged.
     spawn:
-      x: [0.30, 0.32]
-      y: [-0.02, 0.00]
+      x: [0.31, 0.31]
+      y: [-0.01, -0.01]
       z: [0.035, 0.035]                       # vial centroid -> base z=0, top z=0.07
       yaw: [0.0, 0.0]
   plant:
@@ -70,11 +88,12 @@ objects:
       static: 3.0
       dynamic: 2.5
       restitution: 0.0
+    # Fixed spawn — see vial comment above.
     spawn:
-      x: [0.30, 0.32]                         # spawn xy matches the vial
-      y: [-0.02, 0.00]
+      x: [0.31, 0.31]
+      y: [-0.01, -0.01]
       z: [0.10, 0.10]                         # spawn 10 cm above table; settles around 0.06
-      yaw: [-0.2, 0.2]
+      yaw: [0.0, 0.0]
   tray:
     # Vestigial — required for the YAML schema but unused: oracle is in
     # pick-and-lift-only mode (see oracle.terminate_after_lift below).
@@ -106,7 +125,15 @@ cameras:
     clipping_range: [0.1, 4.0]
   wrist_cam:
     parent: tool0_aligned
-    pos: [0.05, 0.0, 0.18]
+    # FIX 2026-05-19: previous pos z=0.18 placed the wrist_cam INSIDE
+    # link_4's housing — every frame rendered gray/black and the CNN
+    # actor had no learnable signal (495-iter run on 2026-05-19 stuck
+    # at 0.7% success, mean reward -0.13, action_std rising). New mount
+    # mirrors the put_plant_back fix: 5 cm SIDEWAYS in +X (clear of the
+    # housing), at z=0 (same height as the tool flange), looking DOWN
+    # +Z toward the workspace via identity rot. See
+    # memory/ppo_vision_breakthrough.md.
+    pos: [0.05, 0.0, 0.0]
     rot: [1.0, 0.0, 0.0, 0.0]
     focal_length: 14.0
     horizontal_aperture: 20.955
@@ -180,6 +207,57 @@ mimic:
       action_noise: 0.03
       num_interpolation_steps: 5
       description: Place the plant on the tray
+
+# --- RL fine-tune (factored pick-only) -------------------------------------
+# Mirror of put_plant_back's RL block. Vial pose is fixed at task start, so
+# RL only learns the precision pick-and-lift; everything past LIFT is
+# scripted (or simply not modeled — terminate_after_lift).
+#
+# success_termination=lifted with min_stable_steps=5 blocks the 1-frame
+# teleport exploit that the kinematic_attach env is vulnerable to (see
+# memory/stable-lift-termination).
+rewards:
+  approach_pickable: 5.0         # bumped 1.0 → 5.0 for asymmetric vision
+                                 # PPO. The CNN actor has no privileged
+                                 # plant pose; with weight=1.0 the dense
+                                 # approach signal is too weak to overcome
+                                 # action_l2_penalty before PPO collapses
+                                 # action_std → ~0.1 (do-nothing minimum).
+                                 # Verified: 108-iter run on 2026-05-19
+                                 # with weight=1.0 collapsed to std=0.14,
+                                 # success=0.
+  approach_target: 0.0           # transport is scripted (not RL-learned)
+  grasp_bonus: 1.0               # +1/step when gripper closed AND TCP
+                                 # within 3cm of plant. Rebalanced from
+                                 # 2.0 (v7) because policy camped at
+                                 # the grasp zone: with weight=2 the
+                                 # camping reward (40/ep) beat the
+                                 # success path (29/ep), so PPO never
+                                 # chose to lift. Halving brings
+                                 # camping down to 20/ep, well below
+                                 # the boosted success path (77.5/ep).
+  lift_bonus: 10.0               # 2× v7. Bumps the per-step lift_hold
+                                 # progress to make stable lift
+                                 # meaningfully more rewarding than
+                                 # camping. Wired to
+                                 # reward_lift_hold_progress in lifted
+                                 # mode — (counter+1)*weight per step
+                                 # while holding.
+  success_bonus: 1000.0          # 2× v7. One-shot terminal bonus on
+                                 # stable-lift success
+                                 # (reward_terminal_stable_lift). With
+                                 # the boost the terminal contribution
+                                 # is ~50 of episode reward — strongly
+                                 # dominant over the rebalanced
+                                 # camping reward (~20).
+  action_l2_penalty: -0.0001     # reduced 10× from -0.001. Same reason:
+                                 # don't dominate the dense approach
+                                 # reward during the exploration phase.
+  lift_height: 0.10              # 10 cm above plant z; clears the vial rim
+  lift_stable_steps: 5           # 5 consecutive steps above threshold
+                                 # required for "success" — blocks 1-frame
+                                 # kin_attach teleport exploit
+  success_termination: lifted    # episode ends on grasp+lift
 
 # --- Data paths + checkpoint locations -------------------------------------
 data:
