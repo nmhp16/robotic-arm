@@ -38,6 +38,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 
+from isaaclab.envs.mdp import randomize_rigid_body_mass, randomize_rigid_body_material
 from isaaclab.utils.noise import GaussianNoiseCfg
 
 from . import events as events_mod
@@ -441,7 +442,9 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         cfg_obj = _build_object_cfg(distractor_name, distractor, prim_suffix=prim_suffix)
         setattr(env_cfg.scene, distractor_name, cfg_obj)
 
-    # --- Reset events: arm jitter + pickable/target pose randomization ----
+    # --- Reset events: arm jitter + pickable/target pose randomization +
+    #                   sim2real domain randomization (physics + visual)
+    enable_dr = bool(robot_cfg.get("enable_domain_randomization", True))
     @configclass
     class _Events:
         randomize_joint_state = EventTerm(
@@ -472,6 +475,44 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                 "asset_cfgs": [SceneEntityCfg("target")],
             },
         )
+        # ---- sim2real domain randomization ----
+        # Pickable friction ±20% — the real-robot's actual friction
+        # coefficient against the plant stem will differ from sim's
+        # nominal 3.0/2.5. Randomizing during training forces the policy
+        # to learn grasping that doesn't depend on exact mu.
+        if enable_dr:
+            randomize_pickable_friction = EventTerm(
+                func=randomize_rigid_body_material,
+                mode="reset",
+                params={
+                    "asset_cfg": SceneEntityCfg("pickable"),
+                    "static_friction_range": (2.4, 3.6),    # 3.0 ± 20%
+                    "dynamic_friction_range": (2.0, 3.0),   # 2.5 ± 20%
+                    "restitution_range": (0.0, 0.0),
+                    "num_buckets": 32,
+                },
+            )
+        # Pickable mass ±15% — plant species + hydration vary mass.
+        if enable_dr:
+            randomize_pickable_mass = EventTerm(
+                func=randomize_rigid_body_mass,
+                mode="reset",
+                params={
+                    "asset_cfg": SceneEntityCfg("pickable"),
+                    "mass_distribution_params": (0.85, 1.15),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            )
+        # Dome light intensity ±50% — real-world lighting varies far
+        # more than physics or geometry. Largest sim2real-gap factor
+        # for vision policies.
+        if enable_dr:
+            randomize_lighting = EventTerm(
+                func=events_mod.randomize_dome_light_intensity,
+                mode="reset",
+                params={"intensity_range": (1500.0, 4500.0)},
+            )
         # Interval mode with a zero-second window means the event manager
         # fires this term every env step (after physics, before next obs).
         # See ``mdp.kinematic_attach_payload`` for the rationale — bypasses
