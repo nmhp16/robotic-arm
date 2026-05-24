@@ -187,6 +187,90 @@ def _t3_401_tweezer() -> ArticulationCfg:
     )
 
 
+def _t3_401_zimmer() -> ArticulationCfg:
+    """Epson T3-401 SCARA arm + Zimmer GEP2010IL-00-B parallel-jaw gripper.
+
+    Same arm kinematics + actuators as the simple_gripper / tweezer variants.
+    The gripper section uses a REAL industrial parallel-jaw mechanism (Zimmer
+    GEP2010IL) extracted from manufacturer CAD, with custom long-thin
+    finger blades (5×3×50 mm) for vial-mouth clearance + plant-stem reach.
+
+    Designed for friction grip without kinematic_attach — the long inertial
+    body of the Zimmer + 200 N grip force should clamp the plant stem
+    reliably (vs the tweezer's <5% friction success documented in
+    friction_grip_attempted.md).
+    """
+    usd_path = os.path.join(_REPO_ROOT, "assets", "t3_401_zimmer", "t3_401_zimmer.usd")
+    return ArticulationCfg(
+        spawn=sim_utils.UsdFileCfg(
+            usd_path=usd_path,
+            rigid_props=sim_utils.RigidBodyPropertiesCfg(
+                disable_gravity=True,
+                max_depenetration_velocity=5.0,
+            ),
+            articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                enabled_self_collisions=False,
+                solver_position_iteration_count=16,
+                solver_velocity_iteration_count=1,
+            ),
+            activate_contact_sensors=False,
+        ),
+        init_state=ArticulationCfg.InitialStateCfg(
+            joint_pos={
+                "joint_1": 0.0,
+                "joint_2": 0.0,
+                "joint_3": 0.0,
+                "joint_4": 0.0,
+                "finger_left_joint": 0.0,
+                "finger_right_joint": 0.0,
+            },
+            pos=(0.0, 0.0, 0.0),
+            rot=(1.0, 0.0, 0.0, 0.0),
+        ),
+        actuators={
+            "shoulder_elbow": ImplicitActuatorCfg(
+                joint_names_expr=["joint_1", "joint_2"],
+                stiffness=1200.0,
+                damping=70.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+            "z_axis": ImplicitActuatorCfg(
+                joint_names_expr=["joint_3"],
+                effort_limit_sim=200.0,
+                velocity_limit_sim=2.0,
+                stiffness=4000.0,
+                damping=80.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+            "wrist": ImplicitActuatorCfg(
+                joint_names_expr=["joint_4"],
+                stiffness=200.0,
+                damping=20.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+            # Zimmer GEP2010IL grip force is 50-200 N. The PD controller
+            # delivers approximate force = stiffness × position-error. With
+            # stiffness=12000 and a typical 1 mm overshoot past contact, force
+            # ≈ 12 N — too light for a 200 N industrial gripper. Bumping
+            # stiffness to 80000 puts the realistic per-mm force at ~80 N,
+            # matching the lower end of Zimmer's spec. damping=200 keeps
+            # the closing motion stable without oscillation.
+            "zimmer_fingers": ImplicitActuatorCfg(
+                joint_names_expr=["finger_.*_joint"],
+                effort_limit_sim=500.0,
+                velocity_limit_sim=0.1,
+                stiffness=80000.0,
+                damping=200.0,
+                friction=0.0,
+                armature=0.0,
+            ),
+        },
+    )
+
+
 def _ur5_omnipicker() -> ArticulationCfg:
     """UR5 6-axis arm + AgiBot OmniPicker parallel-jaw gripper.
 
@@ -303,6 +387,7 @@ def _ur5_omnipicker() -> ArticulationCfg:
 ROBOT_BUILDERS: dict[str, Callable[[], ArticulationCfg]] = {
     "t3_401_simple_gripper": _t3_401_simple_gripper,
     "t3_401_tweezer": _t3_401_tweezer,
+    "t3_401_zimmer": _t3_401_zimmer,
     "ur5_omnipicker": _ur5_omnipicker,
 }
 

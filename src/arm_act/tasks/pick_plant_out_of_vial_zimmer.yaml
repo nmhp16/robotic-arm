@@ -1,0 +1,203 @@
+# Pick a leaf-plant OUT of the vial using the Zimmer GEP2010IL parallel-jaw
+# gripper with custom long thin finger blades — friction grip (NO kinematic
+# attach). Sim2real-deployable variant of pick_plant_out_of_vial.
+#
+# The Zimmer industrial gripper replaces the brittle thin-tweezer:
+#   - Long inertial finger blades (50 mm) reach inside the vial mouth
+#   - Narrow 5mm width fits through ~25 mm vial opening when fully open
+#   - 80 mm Zimmer body sits ABOVE the vial top (z=0.105) with clearance
+#   - 200 N grip force + 12000 N/m PD stiffness should clamp the 4 mm
+#     stem reliably (vs the tweezer's <5% friction grip per
+#     friction_grip_attempted.md)
+#
+# Hover height reduced from 0.10 → 0.06 m because the Zimmer body eats
+# more of the SCARA's vertical reach budget than the tweezer did. With
+# 50 mm fingers + 80 mm body, tcp_z_offset = 0.13 m. Reachable TCP z
+# range is [-0.10, 0.10], so max hover above plant (z=0.04) is 6 cm.
+#
+# To run:
+#   ./scripts/oracle.sh   --task pick_plant_out_of_vial_zimmer --num-demos 15
+
+task:
+  name: pick_plant_out_of_vial_zimmer
+  instruction: pick the plant out of the vial and lift it up
+  gym_id: Isaac-PickPlantOutOfVialZimmer-T3-IK-Rel-v0
+  mimic_gym_id: Isaac-PickPlantOutOfVialZimmer-T3-IK-Rel-Mimic-v0
+
+robot:
+  type: t3_401_zimmer
+  arm_joints: [joint_1, joint_2, joint_3, joint_4]
+  ee_body: tool0_aligned
+  tcp_z_offset: 0.13                          # 80mm Zimmer body + 50mm fingers
+  arm_joint_jitter_std: 0.01                  # halved from 0.02 — at 0.02 the
+                                              # joint perturbation pushes the
+                                              # arm ±0.5cm in xy from the
+                                              # init_joint_pos, often past the
+                                              # tight xy_reach_tol, causing
+                                              # PRE_HOVER stalls
+  gripper_joints: [finger_left_joint, finger_right_joint]
+  gripper_open_m: 0.0                         # joint at 0 = fully open (10mm gap)
+  gripper_close_m: 0.010                      # joint at 0.010 = fully closed
+  gripper_closed_threshold: 0.005             # halfway through stroke = "closed"
+  gripper_driver_joint: finger_left_joint
+  # SCARA Jacobian is SINGULAR at the all-zeros home pose: the first row
+  # (X-velocity) is all zero so DLS IK can't generate X motion until a
+  # perturbation breaks the symmetry. With plant at (0.31, -0.01) — very
+  # close to the arm's symmetry axis — this caused 88% HOVER failures in
+  # the first oracle smoke test (TCP stuck at home, never converging).
+  # The init_joint_pos below spawns the arm in the elbow-down IK solution
+  # for (0.31, -0.01), which is well off the singular config so the IK
+  # converges cleanly from step 1. Computed by 2-link SCARA IK:
+  #   j2 = -acos((r² - L1² - L2²)/(2*L1*L2)) = -1.381 rad
+  #   j1 = atan2(y,x) - atan2(L2 sin(j2), L1+L2 cos(j2)) = 0.554 rad
+  # j3 is set to give some slack from the upper limit (j3=0) so position-
+  # noise jitter doesn't push it out of range.
+  init_joint_pos:
+    joint_1: 0.554
+    joint_2: -1.381
+    joint_3: 0.02
+    joint_4: 0.0
+  # Friction grip — NO kinematic_attach shortcut. This is the real-robot-
+  # deployable variant. The Zimmer's high grip force + long-finger inertia
+  # should hold the stem via friction; if it fails we can add V-groove
+  # collision blocks to the fingertips.
+  use_kinematic_attach: false
+
+objects:
+  # Vial sits on the table; collision disabled (cosmetic) so the plant
+  # rests directly on the table at z=0.04.
+  vial:
+    role: distractor
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
+    kinematic: true
+    collision: false
+    spawn:
+      x: [0.31, 0.31]                         # fixed pos for first iteration
+      y: [-0.01, -0.01]
+      z: [0.035, 0.035]
+      yaw: [0.0, 0.0]
+  plant:
+    role: pickable
+    type: usd
+    usd_path: local:assets/leaf_plant/leaf_plant.usd
+    scale: [1.0, 1.0, 1.0]
+    friction:                                 # high friction; Zimmer blades
+      static: 3.0                             # rely on grip-force × friction
+      dynamic: 2.5                            # to hold the stem during lift
+      restitution: 0.0
+    spawn:
+      x: [0.31, 0.31]
+      y: [-0.01, -0.01]
+      z: [0.10, 0.10]
+      yaw: [0.0, 0.0]
+  tray:
+    role: target
+    type: cuboid
+    size: [0.02, 0.02, 0.001]
+    mass: 0.001
+    color: [0.30, 0.40, 0.55]
+    kinematic: true
+    friction:
+      static: 1.0
+      dynamic: 0.8
+      restitution: 0.0
+    spawn:
+      x: [0.10, 0.10]
+      y: [0.30, 0.30]
+      z: [0.0005, 0.0005]
+      yaw: [0.0, 0.0]
+
+cameras:
+  table_cam:
+    pos: [1.0, 0.0, 0.8]
+    rot: [0.35355, -0.61237, -0.61237, 0.35355]
+    focal_length: 18.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.1, 4.0]
+  wrist_cam:
+    parent: tool0_aligned
+    pos: [0.05, 0.0, 0.0]                     # matches put_plant_back fix
+    rot: [1.0, 0.0, 0.0, 0.0]
+    focal_length: 14.0
+    horizontal_aperture: 20.955
+    clipping_range: [0.01, 2.0]
+    depth: true
+
+success:
+  type: object_on_target
+  object: plant
+  target: tray
+  xy_threshold: 0.05
+  height_threshold: 0.10
+grasp_check:
+  type: object_grasped
+  object: plant
+  diff_threshold: 0.04
+
+# Scripted oracle. Hover height REDUCED from 0.10 → 0.06 because the
+# Zimmer body cuts the SCARA's effective vertical workspace. See URDF
+# comment for the reach budget math.
+oracle:
+  hover_height: 0.04                          # tcp at plant.z + 0.04 = ~0.08
+                                              # was 0.06 → 0.10 hover target sits
+                                              # right at the SCARA's joint_3 limit;
+                                              # any jitter pushes IK out of range
+                                              # and PRE_HOVER fails (observed:
+                                              # 14/15 fails at HOVER in smoke test)
+  grasp_z_offset: 0.025
+  lift_height: 0.10                           # under TCP max 0.10; clears vial rim
+  place_z_offset: 0.0
+  max_dxy: 0.04
+  max_dz: 0.02
+  xy_reach_tol: 0.008                         # widened from 0.004. The
+                                              # original tight 4 mm tolerance
+                                              # is from tweezer-on-stem
+                                              # precision needs, but with V-
+                                              # groove / kin_attach capture
+                                              # at 2 cm we don't need 4 mm
+                                              # absolute precision here.
+                                              # Looser tol → fewer PRE_HOVER
+                                              # stalls from joint-jitter
+                                              # noise.
+  z_reach_tol: 0.020                          # bumped from 0.015 for the
+                                              # same reason
+  z_reach_tol_tight: 0.012
+  grasp_hold_steps: 18
+  release_hold_steps: 5
+  max_steps_per_episode: 400
+  max_episode_attempts_per_demo: 5
+  terminate_after_lift: true
+
+mimic:
+  name: pick_plant_out_of_vial_zimmer_mimic_D0
+  generation_num_trials: 10
+  max_num_failures: 25
+  seed: 1
+  subtasks:
+    - object: plant
+      signal: grasp
+      offset_range: [10, 20]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Grasp the plant in the vial
+      next_description: Place the plant on the tray
+    - object: tray
+      signal: null
+      offset_range: [0, 0]
+      action_noise: 0.03
+      num_interpolation_steps: 5
+      description: Place the plant on the tray
+
+data:
+  raw_path: data/raw/pick_plant_out_of_vial_zimmer/demos.hdf5
+  annotated_path: data/annotated/pick_plant_out_of_vial_zimmer/demos.hdf5
+  augmented_path: data/augmented/pick_plant_out_of_vial_zimmer/demos.hdf5
+  hdf5_path: data/raw/pick_plant_out_of_vial_zimmer/demos.hdf5
+
+training:
+  output_dir: checkpoints/pick_plant_out_of_vial_zimmer
+
+eval:
+  checkpoint: checkpoints/pick_plant_out_of_vial_zimmer/final
