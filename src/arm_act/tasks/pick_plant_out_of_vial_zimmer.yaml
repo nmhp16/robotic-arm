@@ -180,7 +180,15 @@ oracle:
   z_reach_tol_tight: 0.012
   grasp_hold_steps: 18
   release_hold_steps: 5
-  max_steps_per_episode: 400
+  max_steps_per_episode: 400                  # 400 is plenty — diagnostic
+                                              # (2026-05-24) showed ~85% oracle
+                                              # success, all failures in approach
+                                              # phases (IK timeouts under spawn
+                                              # DR), zero at GRASP/LIFT. Bumping
+                                              # to 600 didn't help (noise). The
+                                              # oracle rate doesn't bottleneck
+                                              # the pipeline — demos collect to
+                                              # target regardless.
   max_episode_attempts_per_demo: 5
   terminate_after_lift: true
 

@@ -334,7 +334,13 @@ def main(spec: dict[str, Any]) -> int:
                     torch.ones((len(ids_tensor), 1), dtype=torch.bool, device=device),
                 )
                 env.recorder_manager.export_episodes(ids_tensor)
-                env._reset_idx(torch.tensor(ids_tensor, device=device, dtype=torch.long))
+                _ids_t = torch.tensor(ids_tensor, device=device, dtype=torch.long)
+                env._reset_idx(_ids_t)
+                # record_post_reset captures the NEW episode's /initial_state.
+                # Without it, the next episode for these envs has no
+                # initial_state group and isaaclab_mimic's annotate step
+                # fails with KeyError('initial_state').
+                env.recorder_manager.record_post_reset(_ids_t)
                 exported += len(success_env_ids)
                 for env_id in success_env_ids:
                     s = states[env_id]
@@ -352,9 +358,15 @@ def main(spec: dict[str, Any]) -> int:
                 )
                 # Manually reset the env for non-success cases too — env.step
                 # only auto-resets on terminations from termination_manager,
-                # not on our oracle-internal timeout.
+                # not on our oracle-internal timeout. record_pre_reset flushes
+                # (and, in EXPORT_SUCCEEDED_ONLY mode, discards) the failed
+                # episode buffer; record_post_reset captures the next
+                # episode's /initial_state.
                 if not (terminated_np[env_id] or truncated_np[env_id]):
-                    env._reset_idx(torch.tensor([env_id], device=device, dtype=torch.long))
+                    _id_t = torch.tensor([env_id], device=device, dtype=torch.long)
+                    env.recorder_manager.record_pre_reset(_id_t, force_export_or_skip=False)
+                    env._reset_idx(_id_t)
+                    env.recorder_manager.record_post_reset(_id_t)
 
             # Re-arm any env that just finished an episode (success OR fail).
             finished_ids = set(success_env_ids) | set(reset_oracle_env_ids) | {

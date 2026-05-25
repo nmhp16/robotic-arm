@@ -95,35 +95,46 @@ def _emit_eval_trace(env, cfg: dict, action, t: int) -> None:
     not free at 30 Hz.
     """
     try:
-        from arm_act.tasks._runtime.oracle import (
-            _OracleParams,
-            oracle_action_at_state,
-            snapshot_env_state,
-        )
-        if not hasattr(_emit_eval_trace, "_params"):
-            _emit_eval_trace._params = _OracleParams.from_spec(cfg)
-            _emit_eval_trace._close_thr = float(
-                cfg["robot"].get("gripper_closed_threshold", 0.0025)
-            )
-            _emit_eval_trace._driver_joint = cfg["robot"].get(
-                "gripper_driver_joint", "finger_left_joint"
-            )
+        import numpy as np
 
-        snap = snapshot_env_state(env, _emit_eval_trace._driver_joint)
-        ora = oracle_action_at_state(
-            tcp=snap.tcp, pickable_pos=snap.pickable, target_pos=snap.target,
-            gripper_drive_pos=snap.gripper_pos,
-            gripper_closed_threshold=_emit_eval_trace._close_thr,
-            params=_emit_eval_trace._params,
-        )
+        # Self-contained snapshot (the parallel-oracle rewrite dropped the
+        # snapshot_env_state/oracle_action_at_state helpers). Reads scene
+        # state directly in env-local frame; num_envs==1 for eval.
+        scene = env.unwrapped.scene
+        origin = scene.env_origins[0].cpu().numpy()
+        tcp = scene["ee_frame"].data.target_pos_w[0, 0, :].cpu().numpy() - origin
+        plant = scene["pickable"].data.root_pos_w[0].cpu().numpy() - origin
+        vial = scene["target"].data.root_pos_w[0].cpu().numpy() - origin
+        robot = scene["robot"]
+        dj = cfg["robot"].get("gripper_driver_joint", "finger_left_joint")
+        names = list(robot.data.joint_names)
+        grip = float(robot.data.joint_pos[0, names.index(dj)]) if dj in names else float("nan")
+
+        # Optional oracle comparison if the helper is still importable.
+        ora_s = ""
+        try:
+            from arm_act.tasks._runtime.oracle import _OracleParams, oracle_action_at_state
+            if not hasattr(_emit_eval_trace, "_params"):
+                _emit_eval_trace._params = _OracleParams.from_spec(cfg)
+                _emit_eval_trace._close_thr = float(
+                    cfg["robot"].get("gripper_closed_threshold", 0.0025)
+                )
+            ora = oracle_action_at_state(
+                tcp=tcp, pickable_pos=plant, target_pos=vial, gripper_drive_pos=grip,
+                gripper_closed_threshold=_emit_eval_trace._close_thr,
+                params=_emit_eval_trace._params,
+            )
+            ora_s = f" ora=[{ora[0]:+.3f},{ora[1]:+.3f},{ora[2]:+.3f},{ora[3]:+.2f}]"
+        except Exception:
+            ora_s = ""
+
         print(
             f"[TRACE] t{t:02d} "
-            f"pol=[{action[0]:+.3f},{action[1]:+.3f},{action[2]:+.3f},{action[3]:+.2f}] "
-            f"ora=[{ora[0]:+.3f},{ora[1]:+.3f},{ora[2]:+.3f},{ora[3]:+.2f}] "
-            f"tcp=[{snap.tcp[0]:+.3f},{snap.tcp[1]:+.3f},{snap.tcp[2]:+.3f}] "
-            f"plant=[{snap.pickable[0]:+.3f},{snap.pickable[1]:+.3f},{snap.pickable[2]:+.3f}] "
-            f"vial=[{snap.target[0]:+.3f},{snap.target[1]:+.3f},{snap.target[2]:+.3f}] "
-            f"grip={snap.gripper_pos:.4f}",
+            f"pol=[{action[0]:+.3f},{action[1]:+.3f},{action[2]:+.3f},{action[3]:+.2f}]{ora_s} "
+            f"tcp=[{tcp[0]:+.3f},{tcp[1]:+.3f},{tcp[2]:+.3f}] "
+            f"plant=[{plant[0]:+.3f},{plant[1]:+.3f},{plant[2]:+.3f}] "
+            f"vial=[{vial[0]:+.3f},{vial[1]:+.3f},{vial[2]:+.3f}] "
+            f"grip={grip:.4f}",
             flush=True,
         )
     except Exception as exc:
@@ -164,7 +175,11 @@ def main() -> int:
 
         if args.policy_type == "smolvla":
             from arm_act.eval.remote_policy import RemotePolicy
-            import os
+            # NOTE: os is imported at module level (line 17). A redundant
+            # local `import os` here made Python treat `os` as a local
+            # throughout main(), so the os.environ check at the trace gate
+            # (only reached on the ACT path, which skips this branch) hit
+            # UnboundLocalError. Removed.
             server_python = (
                 args.server_python
                 or pathlib.Path(os.environ.get("ARM_ACT_VENV", str(pathlib.Path.home() / "arm-act-venv"))) / "bin" / "python"
