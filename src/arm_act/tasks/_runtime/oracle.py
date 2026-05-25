@@ -6,9 +6,11 @@ keeps a Python-side state machine per env and feeds a batched action
 tensor to ``env.step()`` each frame.
 
 CLI: ``--num-envs N`` selects parallelism. Default 1 (matches the
-pre-parallelization behavior). 16 is a reasonable starting point on
-the DGX Spark; throughput scales sublinearly past 32 because the GPU
-becomes the bottleneck.
+pre-parallelization behavior). 8 is the recommended cap on the DGX
+Spark: N=16 has tripped abrupt power-off shutdowns under peak GPU load
+(see CLAUDE.md / hardware notes), and throughput already scales
+sublinearly past ~8 as the GPU saturates. Demos export incrementally,
+so a power-off mid-run loses at most the in-flight batch.
 
 State machine per episode (unchanged from the serial version):
   PRE_HOVER        → TCP at start.xy, hover_height
@@ -135,7 +137,8 @@ def _parse_args(default_dataset: str, default_max_steps: int) -> argparse.Namesp
     p = argparse.ArgumentParser()
     p.add_argument("--num-demos", type=int, default=15)
     p.add_argument("--num-envs", type=int, default=1,
-                   help="parallel envs (1 = serial behavior). Try 16 for 5-10x speedup.")
+                   help="parallel envs (1 = serial behavior). Try 8 for ~4-5x speedup. "
+                        "Avoid >8 on DGX Spark: peak GPU load at N=16 has tripped power-off.")
     p.add_argument("--dataset-file", type=pathlib.Path, default=pathlib.Path(default_dataset))
     p.add_argument("--max-steps", type=int, default=default_max_steps)
     p.add_argument("--seed", type=int, default=0)
@@ -180,6 +183,12 @@ def main(spec: dict[str, Any]) -> int:
         env_cfg_spec = gym.spec(gym_id).kwargs["env_cfg_entry_point"]
         env_cfg = _instantiate_env_cfg(env_cfg_spec)
         N = max(1, int(args.num_envs))
+        if N > 8:
+            logger.warning(
+                "--num-envs=%d exceeds the DGX Spark safe cap of 8: peak GPU load "
+                "at N=16 has tripped abrupt power-off shutdowns. Demos export "
+                "incrementally so they survive, but consider --num-envs 8.", N,
+            )
         env_cfg.scene.num_envs = N
         env_cfg.terminations.time_out = None  # oracle handles timeouts manually
         env_cfg.observations.policy.concatenate_terms = False
