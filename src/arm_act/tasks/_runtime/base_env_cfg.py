@@ -51,8 +51,10 @@ class PickPlaceSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DomeLightCfg(color=(0.75, 0.75, 0.75), intensity=3000.0),
     )
 
-    # Filled in by the builder from `objects:` in task.yaml.
-    pickable: RigidObjectCfg = MISSING
+    # Filled in by the builder from `objects:` in task.yaml. The pickable may
+    # be a rigid body OR an articulation (the compliant jointed plant) — both
+    # expose .data.root_pos_w so obs/oracle/metrics are agnostic.
+    pickable: RigidObjectCfg | ArticulationCfg = MISSING
     target: RigidObjectCfg = MISSING
 
 
@@ -225,6 +227,7 @@ class RewardsCfg:
     approach_target = RewTerm(func=mdp.reward_pickable_to_target, weight=1.0)
     grasp_bonus = RewTerm(func=mdp.reward_grasp_at_pickable, weight=1.0)
     lift_bonus = RewTerm(func=mdp.reward_lift_to_height, weight=0.0)
+    lift_shaping = RewTerm(func=mdp.reward_lift_progress_dense, weight=0.0)
     success_bonus = RewTerm(func=mdp.reward_object_on_target, weight=50.0)
     action_l2_penalty = RewTerm(func=mdp.reward_action_penalty, weight=-0.001)
 

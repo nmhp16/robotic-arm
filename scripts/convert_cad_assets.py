@@ -28,6 +28,68 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CAD_OUTPUT = os.path.expanduser("~/test/cad/output")
 
+# COMPLIANCE-ABOVE-GRASP plant URDF (2026-05-25). A first attempt put the
+# spring joint LOW (grasped stem compliant) — but the sim's rigid, position-
+# controlled jaws FOLDED the compliant stem (joint hit 2 rad) and slid off
+# instead of lifting it: 14% oracle vs 38% rigid. Real force-controlled
+# grippers conform; this sim's don't. So put the compliance ABOVE the grasp:
+#   - `stem` (root): RIGID lower stem, solid 6mm box collider z 0..0.040,
+#     heavy. The gripper grasps+lifts THIS (at z~0.035, oracle heights
+#     unchanged) so it lifts as a unit like the 38% rigid plant.
+#   - `leaves`: the floppy leafy crown ABOVE the grasp, on a revolute spring
+#     joint (`leaf_sway`) at z=0.040. Bends when the arm/fingers brush it and
+#     springs back -> the *visible* plant behaves like a real plant (leaves
+#     give) WITHOUT the compliance breaking the grasp. Carries the full leaf
+#     mesh visual (still a plant). Soft spring set in env_cfg.
+# {s}=xy scale (m/mm), {sz}=z scale. The full mesh (base back at world z=0 via
+# the -0.040 visual offset) overlaps the rigid stem in its lower region and
+# shows the leafy crown above the joint, which is the part that sways.
+PLANT_COMPLIANT_URDF = """<?xml version="1.0"?>
+<robot name="{name}">
+  <link name="stem">
+    <visual>
+      <origin xyz="0 0 0.020" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.003" length="0.040"/></geometry>
+      <material name="stem"><color rgba="{r} {g} {b} {a}"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.020" rpy="0 0 0"/>
+      <geometry><box size="0.006 0.006 0.040"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.020" rpy="0 0 0"/>
+      <mass value="0.0017"/>
+      <inertia ixx="2.3e-7" ixy="0" ixz="0" iyy="2.3e-7" iyz="0" izz="1e-8"/>
+    </inertial>
+  </link>
+  <link name="leaves">
+    <visual>
+      <origin xyz="0 0 -0.040" rpy="0 0 0"/>
+      <geometry><mesh filename="{mesh_path}" scale="{s} {s} {sz}"/></geometry>
+      <material name="leaf"><color rgba="{r} {g} {b} {a}"/></material>
+    </visual>
+    <!-- NO leaf collider: the 80mm fingers must pass THROUGH the leaf zone
+         (z 40-58) to reach the recessed stem at z~35, so any collider here
+         blocks the reach-in grasp (verified: leaf box -> 8%, approach-phase
+         fails). Visual-only leaves (like the 38% rigid plant) let the fingers
+         pass. Trade-off: the leaves then don't physically sway. -->
+    <inertial>
+      <origin xyz="0 0 0.010" rpy="0 0 0"/>
+      <mass value="0.0003"/>
+      <inertia ixx="1e-7" ixy="0" ixz="0" iyy="1e-7" iyz="0" izz="1e-7"/>
+    </inertial>
+  </link>
+  <joint name="leaf_sway" type="revolute">
+    <parent link="stem"/>
+    <child link="leaves"/>
+    <origin xyz="0 0 0.040" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-0.9" upper="0.9" effort="2.0" velocity="10.0"/>
+    <dynamics damping="0.0" friction="0.0"/>
+  </joint>
+</robot>
+"""
+
 # Per-asset config dicts. Fields:
 #   stl_basename      — input STL in test/cad/output/
 #   asset_dir         — output directory under assets/
@@ -49,7 +111,31 @@ ASSETS = [
         "scale": 0.001,
         "collider": "convex_decomposition",
         "friction": (0.5, 0.4, 0.0),
-        "collision_override": None,
+        # HOLLOW WELL collision (4 walls) instead of the solid convex-decomp
+        # (which filled the bore and is why collision was disabled). The well
+        # has a ~20mm square bore that holds the plant centred (can't be
+        # knocked far) yet admits the 16mm gripper, and 70mm tall walls. The
+        # plant stands inside; the long tip reaches down past the rim. Visual
+        # stays the round vial mesh. This is the fixture that makes the grasp
+        # repeatable (the real "pick out of a vial" task).
+        "collision_override": (
+            '<collision>\n'  # +X wall
+            '      <origin xyz="0.0125 0 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'  # -X wall
+            '      <origin xyz="-0.0125 0 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'  # +Y wall
+            '      <origin xyz="0 0.0125 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'  # -Y wall
+            '      <origin xyz="0 -0.0125 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
+            '    </collision>'
+        ),
         "color_rgba": (0.5, 0.6, 0.5, 1.0),
     },
     {
@@ -59,30 +145,77 @@ ASSETS = [
         "kinematic": False,
         "scale": 0.001,
         "collider": "convex_decomposition",
-        "friction": (3.0, 2.5, 0.0),
+        "friction": (6.0, 5.0, 0.0),   # 3->6: a real plant stem isn't slick; higher mu raises the static-friction limit so the grip holds against gravity through the LIFT (the dominant slip failure). Safe now that the V-groove stops lateral ejection.
         # Saturated green so the policy's vision backbone has a strong colour
         # signal to localize the pickable against the grey table/vial/tray.
         "color_rgba": (0.15, 0.75, 0.20, 1.0),
-        # Tiny stub collision at the plant base. The full 80 mm-tall stem
-        # collision used to overlap with the wrist (link_4) cylinder during
-        # DESCEND, stalling the IK at z~0.106. Kinematic_attach captures the
-        # plant via root-to-TCP distance, not via contact, so a small base
-        # stub is sufficient — the tweezer can descend freely past the
-        # visual stem without colliding with anything.
-        # NOTE: kinematic_attach is the right abstraction for real tweezer
-        # grip — PhysX rigid contact can't model compliant tweezer tips,
-        # so we use the welded attach as the sim-correct approximation of
-        # "real tweezer reliably grips when closed near object." See
-        # friction_grip_attempted memory for 2026-05-15/05-18 attempts to
-        # do this with real friction; all gave 0%.
+        # Stem collision proxy for ACTUAL friction grip (2026-05-25).
+        # Previously a 10 mm base stub (built for kinematic_attach, which grips
+        # by root-to-TCP distance, not contact) — so there was nothing to close
+        # on at the grasp height (~z=0.022) and the gripper closed past the
+        # visual stem every time (0% honest lift). This replaces it with a
+        # clean cylinder over the lower stem region (z 0..0.045) that the spec
+        # parallel gripper can actually pinch. Capped at 45 mm (not the full
+        # 80 mm) so it does NOT reach up and overlap the wrist (link_4) during
+        # DESCEND — that overlap was the original reason the stem collision was
+        # removed (IK stall at z~0.106). Radius 4 mm = 8 mm graspable stem.
+        # The leafy VISUAL mesh is unchanged — it's still a plant; this is just
+        # a standard simple collision proxy for a complex mesh.
+        # Stem collision = a thin BOX (6x6x45mm), not a cylinder. A rigid round
+        # cylinder squeezed by flat parallel jaws is unstable — it rolls/squirts
+        # out (verified: hold-vs-grip-force window is narrow + alignment-
+        # sensitive; 80N held 2/41, 120N held 0/64). A real plant stem is
+        # COMPLIANT and flattens under the jaws into a stable face-to-face
+        # contact, which a thin box models better than a rigid cylinder AND
+        # grips reliably regardless of grip force / small misalignment. 6mm
+        # wide so the spec 10mm open jaws clear it on descent (~2mm/side).
+        # Leafy VISUAL mesh unchanged — still a plant.
+        # Box nub for the graspable stem. Origin z=0.058 in the UNSCALED frame
+        # so that with the task's [1,1,0.6] z-squash (plant shortened to fit
+        # inside the 70mm vial) it lands at world z~0.035 — a reach-in grasp
+        # height near the top of the recessed plant (not deep at the vial
+        # floor). Box (not cylinder) so flat jaws get a stable face grip.
+        # ROUND stem (6mm cyl) for the V-GROOVE grip: a cylinder nests + self-
+        # centres in the fingertip V (form-closure), where a box doesn't seat
+        # cleanly. (A cylinder in FLAT jaws rolled out — 2/41 — which is why
+        # this was a box before; the V-groove fixes that by cradling it.)
+        # length 0.040 * spawn z-scale 0.6 = 0.024 m world, centred at world
+        # z=0.058*0.6=0.035 (the grasp height). radius 0.003 = 6mm dia.
+        # ROUND 6mm stem for the V-groove grip. Z-form-closure (node + fingertip
+        # ledge) was built TWICE to defeat the vertical lift-slip — node-on-prong
+        # -tops (33%) and node-on-proper-solid-ledge (25%) — NEITHER beat the 40%
+        # V-groove+mu6 config on large samples. The ledge doesn't reliably catch
+        # the node (the oracle's grasp variation + sim contact non-determinism
+        # mean the node rarely lands on the small shelf). Reverted. See
+        # grasp_friction_ceiling memory: ~40% is the real-friction ceiling here.
         "collision_override": (
             '<collision>\n'
-            '      <origin xyz="0 0 0.005" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.058" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder length="0.010" radius="0.0040"/>\n'
+            '        <cylinder radius="0.003" length="0.040"/>\n'
             '      </geometry>\n'
             '    </collision>'
         ),
+    },
+    {
+        # COMPLIANT (jointed) plant — same leaf_plant.stl, but built as a
+        # 2-link articulation (base + spring-jointed stem_top) so the stem
+        # BENDS when touched instead of being knocked away. New asset dir so
+        # the rigid leaf_plant.usd that other tasks use stays untouched
+        # (CLAUDE.md #2). Only pick_plant_out_of_vial_zimmer.yaml points here.
+        # Dims baked into the URDF at FINAL size (no spawn scale on an
+        # articulation — scale=0.001 xy, z_squash 0.6 -> 48mm tall plant).
+        "stl": "leaf_plant",
+        "asset_dir": "leaf_plant_compliant",
+        "mass": 0.002,                 # informational; per-link masses are in the URDF
+        "kinematic": False,            # FLOATING base (free root) so it lifts out
+        "scale": 0.001,
+        "z_squash": 0.725,             # mesh -> 58mm: 40mm rigid stem + ~18mm leafy crown above the joint, < 70mm vial
+        "collider": "convex_decomposition",
+        "friction": (3.0, 2.5, 0.0),
+        "color_rgba": (0.15, 0.75, 0.20, 1.0),
+        "collision_override": None,    # the multi-link URDF defines its own colliders
+        "urdf_text": PLANT_COMPLIANT_URDF,
     },
 ]
 
@@ -171,6 +304,8 @@ def convert(
     friction: tuple | None = None,
     collision_override: str | None = None,
     color_rgba: tuple = (0.5, 0.6, 0.5, 1.0),
+    urdf_override: str | None = None,
+    z_squash: float = 1.0,
 ) -> None:
     """Wrap one STL in a minimal URDF and convert it to USD under ``assets/<asset_dir_name>/``.
 
@@ -213,19 +348,27 @@ def convert(
     shutil.copy2(stl_path, local_mesh)
 
     mesh_rel = f"meshes/{asset_dir_name}.stl"
-    if collision_override is not None:
-        collision_block = collision_override
-    else:
-        collision_block = DEFAULT_COLLISION_BLOCK.format(mesh_path=mesh_rel, s=scale)
     r, g, b, a = color_rgba
-    urdf_text = URDF_TEMPLATE.format(
-        name=asset_dir_name,
-        mesh_path=mesh_rel,
-        s=scale,
-        mass=mass,
-        collision_block=collision_block,
-        r=r, g=g, b=b, a=a,
-    )
+    if urdf_override is not None:
+        # Multi-link (articulated) asset: caller supplies the full URDF. {sz}
+        # is the z-axis mesh scale (z-squash baked in) vs {s} for x/y.
+        urdf_text = urdf_override.format(
+            name=asset_dir_name, mesh_path=mesh_rel,
+            s=scale, sz=scale * z_squash, r=r, g=g, b=b, a=a,
+        )
+    else:
+        if collision_override is not None:
+            collision_block = collision_override
+        else:
+            collision_block = DEFAULT_COLLISION_BLOCK.format(mesh_path=mesh_rel, s=scale)
+        urdf_text = URDF_TEMPLATE.format(
+            name=asset_dir_name,
+            mesh_path=mesh_rel,
+            s=scale,
+            mass=mass,
+            collision_block=collision_block,
+            r=r, g=g, b=b, a=a,
+        )
     with tempfile.NamedTemporaryFile("w", suffix=".urdf", dir=usd_dir, delete=False) as f:
         urdf_path = f.name
         f.write(urdf_text)
@@ -274,6 +417,8 @@ def main() -> None:
                 friction=a["friction"],
                 collision_override=a["collision_override"],
                 color_rgba=a.get("color_rgba", (0.5, 0.6, 0.5, 1.0)),
+                urdf_override=a.get("urdf_text"),
+                z_squash=a.get("z_squash", 1.0),
             )
         except FileNotFoundError as e:
             print(f">>> SKIP {a['stl']}: {e}", flush=True)

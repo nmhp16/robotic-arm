@@ -311,13 +311,25 @@ def main(spec: dict[str, Any]) -> int:
                 elif reached and s.phase is Phase.LIFT and s.lift_pause_counter < s.jitter.extra_lift_pause and not params.terminate_after_lift:
                     s.lift_pause_counter += 1
                 elif reached:
-                    # Early success on LIFT in terminate_after_lift mode.
+                    # Early success on LIFT in terminate_after_lift mode —
+                    # but ONLY if the PLANT actually came up. The flat-finger
+                    # friction grip can raise the TCP to lift_height while the
+                    # stem slips out, which used to be exported as a false
+                    # SUCCESS (verified: demos where plant z fell to the table
+                    # were marked success). Gate on the live pickable z.
                     if params.terminate_after_lift and s.phase is Phase.LIFT:
-                        success_env_ids.append(env_id)
-                        s.succeeded = True
-                        continue
-                    s.phase = _next_phase(s.phase)
-                    s.hold_counter = 0
+                        # In-vial "lifted out": plant root above ~0.02 (clears the
+                        # vial rim). Real lifts hit ~0.038; misses stay <0. 0.6*
+                        # lift_height was 0.042 — too high, under-counted. Use 0.02.
+                        if float(pickable_now[2]) >= 0.020:
+                            success_env_ids.append(env_id)
+                            s.succeeded = True
+                            continue
+                        # TCP at height but plant didn't lift — not a success.
+                        # Stay in LIFT; it'll time out as an honest FAIL.
+                    else:
+                        s.phase = _next_phase(s.phase)
+                        s.hold_counter = 0
 
                 # Env-detected success (placement-mode tasks).
                 if bool(env.termination_manager.get_term("success")[env_id]):

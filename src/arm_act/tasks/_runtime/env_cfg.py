@@ -16,7 +16,8 @@ import os
 from typing import Any
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import RigidObjectCfg
+from isaaclab.actuators import ImplicitActuatorCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from isaaclab.controllers.differential_ik_cfg import DifferentialIKControllerCfg
 from isaaclab.devices.device_base import DevicesCfg
 from isaaclab.devices.keyboard import Se3KeyboardCfg
@@ -161,6 +162,17 @@ def _apply_reward_params(
         driver_joint=driver_joint,
         closed_threshold=closed_threshold,
     )
+    # Dense partial-lift shaping (off by default; enable via a non-zero
+    # lift_shaping weight in the rewards: block). Bridges the grasp -> lift
+    # gradient gap that the binary lift_bonus leaves open under friction grip.
+    rew.lift_shaping.params = dict(
+        ee_frame_cfg=SceneEntityCfg("ee_frame"),
+        object_cfg=SceneEntityCfg("pickable"),
+        lift_height=lift_height,
+        diff_threshold=0.06,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
     # Re-wire the lifted-mode reward stack when the task selects
     # success_termination=lifted. Two changes from the default
     # (placed-mode) wiring:
@@ -215,8 +227,8 @@ def _apply_reward_params(
             raise KeyError(
                 f"rewards.{term_name!r} in task spec doesn't match any "
                 f"reward term in RewardsCfg (known: approach_pickable, "
-                f"approach_target, grasp_bonus, lift_bonus, success_bonus, "
-                f"action_l2_penalty)"
+                f"approach_target, grasp_bonus, lift_bonus, lift_shaping, "
+                f"success_bonus, action_l2_penalty)"
             )
         term.weight = float(w)
 
@@ -457,14 +469,32 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                 "asset_cfg": SceneEntityCfg("robot"),
             },
         )
+        # If the task has a `vial` distractor, co-randomize plant+vial by the
+        # SAME offset (so the plant stays in the well while its world position
+        # varies — forces a vision actor to localize). Else randomize the
+        # pickable alone (generic behaviour for other tasks).
         randomize_pickable = EventTerm(
-            func=franka_stack_events.randomize_object_pose,
+            func=(
+                events_mod.randomize_plant_and_vial_together
+                if "vial" in objects
+                else franka_stack_events.randomize_object_pose
+            ),
             mode="reset",
-            params={
-                "pose_range": _spawn_pose_range(pickable["spawn"]),
-                "min_separation": 0.0,
-                "asset_cfgs": [SceneEntityCfg("pickable")],
-            },
+            params=(
+                {
+                    "pose_range": _spawn_pose_range(pickable["spawn"]),
+                    "plant_cfg": SceneEntityCfg("pickable"),
+                    "vial_cfg": SceneEntityCfg("vial"),
+                    "plant_z": float(_mid(pickable["spawn"]["z"])),
+                    "vial_z": float(_mid(objects["vial"]["spawn"]["z"])),
+                }
+                if "vial" in objects
+                else {
+                    "pose_range": _spawn_pose_range(pickable["spawn"]),
+                    "min_separation": 0.0,
+                    "asset_cfgs": [SceneEntityCfg("pickable")],
+                }
+            ),
         )
         randomize_target = EventTerm(
             func=franka_stack_events.randomize_object_pose,
@@ -759,6 +789,50 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
             usd_full = raw
         else:
             usd_full = f"{ISAAC_NUCLEUS_DIR}/{raw}"
+        # Articulated pickable (e.g. the compliant jointed plant): build an
+        # ArticulationCfg with a passive spring on the bend joint instead of a
+        # rigid body. The spring (ImplicitActuator holding joint target 0)
+        # makes the stem FLEX under a finger push and spring back, instead of
+        # being knocked away like a rigid body (the ~38% rigid-plant ceiling).
+        # Floating base (free root, gravity on) so it rests in the vial well
+        # and the grasp lifts the whole plant out. obs/oracle/lift-metric all
+        # read .data.root_pos_w (the base link) — same convention as rigid.
+        if obj.get("articulated"):
+            spring = obj.get("spring") or {}
+            spring_joint = str(spring.get("joint", "stem_bend"))
+            return ArticulationCfg(
+                prim_path=prim_path,
+                init_state=ArticulationCfg.InitialStateCfg(
+                    pos=list(init_pos),
+                    rot=[1, 0, 0, 0],
+                    joint_pos={spring_joint: 0.0},
+                ),
+                spawn=UsdFileCfg(
+                    usd_path=usd_full,
+                    scale=tuple(obj.get("scale", (1.0, 1.0, 1.0))),
+                    rigid_props=RigidBodyPropertiesCfg(
+                        disable_gravity=False,
+                        solver_position_iteration_count=16,
+                        solver_velocity_iteration_count=1,
+                        max_depenetration_velocity=1.0,
+                    ),
+                    articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+                        articulation_enabled=True,
+                        enabled_self_collisions=False,
+                    ),
+                    collision_props=collision_props,
+                ),
+                actuators={
+                    "stem_spring": ImplicitActuatorCfg(
+                        joint_names_expr=[spring_joint],
+                        stiffness=float(spring.get("stiffness", 0.05)),
+                        damping=float(spring.get("damping", 0.005)),
+                        effort_limit=float(spring.get("effort_limit", 5.0)),
+                        velocity_limit=float(spring.get("velocity_limit", 10.0)),
+                    ),
+                },
+            )
+
         # Locally-converted USDs are produced via UrdfConverter which marks
         # the root with ArticulationRootAPI even for single-link assets.
         # That conflicts with RigidObjectCfg, which expects a plain rigid

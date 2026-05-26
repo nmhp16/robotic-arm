@@ -62,7 +62,9 @@ class DefaultPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     # set both lists to ["proprio", "privileged"] — but then the policy
     # is no longer deployable.
     obs_groups = {
-        "actor": ["proprio"],
+        # TEMP(diagnostic 2026-05-25): privileged actor to re-test learnability
+        # AFTER the grip-force+pad-width physics tweak. REVERT to ["proprio"].
+        "actor": ["proprio", "privileged"],
         "critic": ["proprio", "privileged"],
     }
 

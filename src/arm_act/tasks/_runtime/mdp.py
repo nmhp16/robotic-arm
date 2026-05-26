@@ -459,10 +459,20 @@ def _pickable_initial_z(env: ManagerBasedRLEnv, object_name: str) -> torch.Tenso
     measure displacement relative to spawn height instead of an absolute
     threshold (works regardless of where the plant lands after settling)."""
     attr = f"_initial_pickable_z_{object_name}"
+    obj: RigidObject = env.scene[object_name]
+    cur = obj.data.root_pos_w[:, 2]
     if not hasattr(env, attr):
-        obj: RigidObject = env.scene[object_name]
-        setattr(env, attr, obj.data.root_pos_w[:, 2].clone())
-    return getattr(env, attr)
+        setattr(env, attr, cur.clone())
+    z0 = getattr(env, attr)
+    # Re-capture per episode: for envs that just reset (episode start), reset
+    # z0 to the current spawn z. The old once-ever cache froze z0 at the FIRST
+    # episode's spawn for the whole run — wrong under per-episode spawn
+    # randomization, and it captured pre-settle. Spawning at rest (yaml) plus
+    # this per-episode refresh makes the lift baseline correct.
+    just_reset = env.episode_length_buf <= 1
+    z0 = torch.where(just_reset, cur, z0)
+    setattr(env, attr, z0)
+    return z0
 
 
 def reward_lift_to_height(
@@ -497,6 +507,43 @@ def reward_lift_to_height(
     z0 = _pickable_initial_z(env, object_cfg.name)
     lifted = (obj.data.root_pos_w[:, 2] - z0) >= lift_height
     return torch.logical_and(grasped, lifted).to(torch.float32)
+
+
+def reward_lift_progress_dense(
+    env: ManagerBasedRLEnv,
+    ee_frame_cfg: SceneEntityCfg = SceneEntityCfg("ee_frame"),
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    lift_height: float = 0.10,
+    diff_threshold: float = 0.06,
+    driver_joint: str = "finger_left_joint",
+    closed_threshold: float = 0.02,
+) -> torch.Tensor:
+    """Dense partial-lift shaping reward, gated on a grasp.
+
+    Returns ``clamp((pickable_z - spawn_z) / lift_height, 0, 1)`` on steps
+    where the gripper is closed near the pickable, else 0. Unlike
+    ``reward_lift_to_height`` (binary: fires only at the FULL lift_height)
+    this gives a smooth gradient the instant the policy raises the object
+    at all, bridging the grasp → partial-lift → full-lift gap.
+
+    Essential for FRICTION GRIP, where lifts are partial/slipping and the
+    binary lift reward never fires — leaving PPO with no signal that
+    grasping leads anywhere (observed: zimmer_friction_v1 plateaued at 0%
+    success with lift_bonus stuck at 0). Gating on the grasp prevents
+    reward-hacking by merely knocking the object upward without holding it.
+    """
+    grasped = object_grasped(
+        env,
+        ee_frame_cfg=ee_frame_cfg,
+        object_cfg=object_cfg,
+        diff_threshold=diff_threshold,
+        driver_joint=driver_joint,
+        closed_threshold=closed_threshold,
+    )
+    obj: RigidObject = env.scene[object_cfg.name]
+    z0 = _pickable_initial_z(env, object_cfg.name)
+    frac = torch.clamp((obj.data.root_pos_w[:, 2] - z0) / lift_height, 0.0, 1.0)
+    return grasped.to(torch.float32) * frac
 
 
 def pickable_lifted(

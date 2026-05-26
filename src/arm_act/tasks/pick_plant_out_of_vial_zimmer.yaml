@@ -28,17 +28,22 @@ robot:
   type: t3_401_zimmer
   arm_joints: [joint_1, joint_2, joint_3, joint_4]
   ee_body: tool0_aligned
-  tcp_z_offset: 0.13                          # 80mm Zimmer body + 50mm fingers
-  arm_joint_jitter_std: 0.01                  # halved from 0.02 — at 0.02 the
-                                              # joint perturbation pushes the
-                                              # arm ±0.5cm in xy from the
-                                              # init_joint_pos, often past the
-                                              # tight xy_reach_tol, causing
-                                              # PRE_HOVER stalls
+  tcp_z_offset: 0.16                          # 80mm Zimmer body + 80mm fingers (lengthened tip to reach into the vial)
+  arm_joint_jitter_std: 0.003                 # lowered 0.01->0.005->0.003 for a
+                                              # cleaner in-vial grasp: jitter
+                                              # wobbles the jaws into the stem
+                                              # during descent. Lower = the jaws
+                                              # stay centred -> more reliable grasp.
   gripper_joints: [finger_left_joint, finger_right_joint]
   gripper_open_m: 0.0                         # joint at 0 = fully open (10mm gap)
-  gripper_close_m: 0.010                      # joint at 0.010 = fully closed
-  gripper_closed_threshold: 0.005             # halfway through stroke = "closed"
+  # Close to GRIP the ~8mm stem, not slam shut. The stem-cylinder collision
+  # blocks the fingers at joint~0.001 (8mm gap); commanding 0.002 gives a firm
+  # ~80N grip. Full close (0.010 = 500N) squeezed the round stem OUT from
+  # between the flat faces (ejection — verified in the grasp trajectory: plant
+  # lifted 2.5cm then squirted out as the gap went to -0.010). This is what a
+  # real force-controlled gripper does — close to grip force, not to a stop.
+  gripper_close_m: 0.006                      # firmer (was 0.003): firmer HURT with FLAT jaws (ejected the stem), but the V-groove now holds it laterally, so more grip force = more friction to fight the lift-slip without ejection
+  gripper_closed_threshold: 0.0015            # below the ~0.002 gripped pos (6mm stem) so the grasp registers as "closed"
   gripper_driver_joint: finger_left_joint
   # SCARA Jacobian is SINGULAR at the all-zeros home pose: the first row
   # (X-velocity) is all zero so DLS IK can't generate X motion until a
@@ -72,22 +77,42 @@ objects:
     usd_path: local:assets/wide_vial/wide_vial.usd
     scale: [1.0, 1.0, 1.0]
     kinematic: true
-    collision: false
-    # Spawn randomization: vial xy varies ±2cm from its nominal pose.
-    # This is the sim2real-deployment range — real workcells have
-    # similar fixture-position tolerance. Range chosen tight enough
-    # that the Zimmer's ~5mm xy alignment requirement still has margin
-    # (oracle's xy_reach_tol=0.008 + actuator settling gets us there).
+    collision: true    # enable the hollow-well collision (the fixture that holds the plant)
+    # Fixed + co-located with the plant for the first in-vial test: plant
+    # stands at the vial centre so the centred gripper can reach it. (Add
+    # co-spawn jitter later once the grasp mechanism is reliable.)
     spawn:
-      x: [0.29, 0.33]
-      y: [-0.03, 0.01]
+      x: [0.31, 0.31]
+      y: [-0.01, -0.01]
       z: [0.035, 0.035]
       yaw: [0.0, 0.0]
   plant:
     role: pickable
     type: usd
+    # PLANT ASSET CHOICE — finding 2026-05-25. A COMPLIANT jointed plant was
+    # fully built (assets/leaf_plant_compliant + the articulated/spring support
+    # in convert_cad_assets.py + env_cfg) to model real leaf/stem flex. But in
+    # THIS sim the marginal friction grip cannot tolerate ANY added plant
+    # compliance, measured directly:
+    #   - rigid single body ............... 38-62%  (the working vehicle)
+    #   - spring AT the grasp ............. 14%  (stem folds under the jaws,
+    #                                            joint hit 2 rad, jaws slide off)
+    #   - compliance above + leaf collider  8%  (collider blocks the 80mm
+    #                                            reach-in fingers en route to
+    #                                            the recessed stem)
+    #   - compliance above + visual leaves 12%  (floppy leaf MASS swings the
+    #                                            stem out of the grip on lift)
+    # Rigid position-controlled jaws + a marginal friction grip + plant
+    # compliance are fundamentally at odds here (a real FORCE-controlled,
+    # compliant-pad gripper would behave differently — but the Zimmer is kept
+    # at manufacturer spec). So the deployable vehicle is the RIGID plant with
+    # the leaf MESH visual: it IS a plant (looks right to the camera), grasps
+    # reliably; it just doesn't physically sway in sim (documented sim limit;
+    # the real plant will). To revisit compliance later: usd_path ->
+    # leaf_plant_compliant, add `articulated: true` + a `spring:` block,
+    # scale [1,1,1] (see git history).
     usd_path: local:assets/leaf_plant/leaf_plant.usd
-    scale: [1.0, 1.0, 1.0]
+    scale: [1.0, 1.0, 0.6]   # z-squash to ~48mm so the plant is SHORTER than the 70mm vial (recessed inside)
     friction:
       static: 3.0
       dynamic: 2.5
@@ -96,9 +121,19 @@ objects:
     # to wherever the vial settles. yaw randomization disabled because
     # the leaf orientation doesn't matter — only the stem position does.
     spawn:
-      x: [0.29, 0.33]
-      y: [-0.03, 0.01]
-      z: [0.10, 0.10]
+      # +-1.5cm spawn DR for the VISION policy: the plant (and the vial, via
+      # the randomize_plant_and_vial_together co-spawn event) move together
+      # around the workspace, so the wrist-cam actor must LOCALIZE the plant
+      # rather than memorize a fixed approach. (For BC demo collection this was
+      # tightened to fixed; RL doesn't need centred demos, so DR is on.)
+      x: [0.30, 0.32]
+      y: [-0.02, 0.0]
+      # Spawn at the table rest height. The vial is cosmetic (no real
+      # support), so a z=0.10 spawn free-fell ~10cm to the table every
+      # episode — which (a) broke the lift metric (z0 captured pre-settle
+      # ~0.10 made the +0.10 lift threshold need z>=0.20, unreachable) and
+      # (b) disturbed the grasp. Spawning at rest removes both.
+      z: [0.0, 0.0]
       yaw: [-0.2, 0.2]
   tray:
     role: target
@@ -150,31 +185,60 @@ grasp_check:
   object: plant
   diff_threshold: 0.04
 
+# --- RL rewards (PPO) -------------------------------------------------------
+# Ported from pick_plant_out_of_vial.yaml's v8-tuned block (the run that
+# reached 98% on the analogous task). Weights carried over verbatim because
+# the reward STRUCTURE (dense approach → grasp_bonus → lift-hold progress →
+# terminal stable-lift) is task-agnostic; only lift_height is geometry-
+# specific and already matches the Zimmer's oracle lift_height (0.10).
+# NOTE: this task is friction grip (use_kinematic_attach: false), which is
+# HARDER for PPO than the kin_attach task these weights were tuned on —
+# expect to iterate the approach/grasp balance if the reward curve stalls.
+rewards:
+  approach_pickable: 5.0         # dense; CNN actor has no privileged plant
+                                 # pose, so a weak (1.0) signal lets PPO
+                                 # collapse action_std to the do-nothing min.
+  approach_target: 0.0           # transport is scripted, not RL-learned
+  grasp_bonus: 1.0               # +1/step when gripper closed AND TCP <3cm
+                                 # of plant (camping-safe at this weight)
+  lift_bonus: 10.0               # per-step lift_hold progress; makes a held
+                                 # lift clearly beat camping at the grasp zone
+  lift_shaping: 5.0              # DENSE partial-lift reward (∝ plant height,
+                                 # gated on grasp). Bridges grasp→lift: the
+                                 # binary lift_bonus never fires under friction
+                                 # grip (slipping partial lifts), so v1 stalled
+                                 # at 0% with lift_bonus=0. This pays out the
+                                 # instant the plant rises at all. Below
+                                 # lift_bonus so a full stable hold still wins.
+  success_bonus: 1000.0          # one-shot terminal bonus on stable lift
+  action_l2_penalty: -0.0001     # small; don't drown the approach signal
+  lift_height: 0.030             # FIXED (was 0.10 — UNREACHABLE: oracle's best lift
+                                 # was +0.08, plant maxes ~0.05, so success read 0
+                                 # as a metric artifact). 0.030 = a clear stable
+                                 # lift-OUT of the vial, matching the oracle's
+                                 # honest z>=0.020 criterion. Reachable.
+  lift_stable_steps: 5           # consecutive steps above threshold = success
+  success_termination: lifted    # episode ends on grasp + stable lift
+
 # Scripted oracle. Hover height REDUCED from 0.10 → 0.06 because the
 # Zimmer body cuts the SCARA's effective vertical workspace. See URDF
 # comment for the reach budget math.
 oracle:
-  hover_height: 0.04                          # tcp at plant.z + 0.04 = ~0.08
-                                              # was 0.06 → 0.10 hover target sits
-                                              # right at the SCARA's joint_3 limit;
-                                              # any jitter pushes IK out of range
-                                              # and PRE_HOVER fails (observed:
-                                              # 14/15 fails at HOVER in smoke test)
-  grasp_z_offset: 0.025
-  lift_height: 0.10                           # under TCP max 0.10; clears vial rim
+  # In-vial grasp (long 80mm tip, ~47mm plant in 70mm vial well). Heights kept
+  # within the SCARA's reduced TCP reach (~0.07 with the long tip): hover just
+  # above the plant top, grasp mid-upper, lift as high as the arm can (the
+  # 70mm vial is near the reach ceiling — if lift-out fails here, the vial
+  # needs to be shorter, which is the kinematics finding).
+  hover_height: 0.05
+  grasp_z_offset: 0.035
+  lift_height: 0.07                           # the long-tip TCP ceiling (max upward reach)
   place_z_offset: 0.0
   max_dxy: 0.04
   max_dz: 0.02
-  xy_reach_tol: 0.008                         # widened from 0.004. The
-                                              # original tight 4 mm tolerance
-                                              # is from tweezer-on-stem
-                                              # precision needs, but with V-
-                                              # groove / kin_attach capture
-                                              # at 2 cm we don't need 4 mm
-                                              # absolute precision here.
-                                              # Looser tol → fewer PRE_HOVER
-                                              # stalls from joint-jitter
-                                              # noise.
+  xy_reach_tol: 0.008                         # back to 38% config; tightening to
+                                              # 0.003 didn't help capture (28%)
+                                              # -> remaining variance is friction
+                                              # non-determinism, not alignment.
   z_reach_tol: 0.020                          # bumped from 0.015 for the
                                               # same reason
   z_reach_tol_tight: 0.012
@@ -220,6 +284,7 @@ data:
 
 training:
   output_dir: checkpoints/pick_plant_out_of_vial_zimmer
+  save_every: 2000        # fixed-spawn task converges fast (loss 0.6->0.16 by step 350); checkpoint often so we can eval early + stop
 
 eval:
   checkpoint: checkpoints/pick_plant_out_of_vial_zimmer/final

@@ -99,3 +99,46 @@ def randomize_arm_joints_by_gaussian_offset(
     asset.set_joint_position_target(joint_pos, env_ids=env_ids)
     asset.set_joint_velocity_target(joint_vel, env_ids=env_ids)
     asset.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+
+
+def randomize_plant_and_vial_together(
+    env: ManagerBasedEnv,
+    env_ids: torch.Tensor,
+    pose_range: dict,
+    plant_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    vial_cfg: SceneEntityCfg = SceneEntityCfg("vial"),
+    plant_z: float = 0.0,
+    vial_z: float = 0.035,
+) -> None:
+    """Co-randomize the plant + vial by the SAME (x, y) offset per env.
+
+    The plant must stay inside the vial well, so independent randomization
+    would push it out. This samples ONE (x, y) per env (plus a plant yaw) and
+    writes BOTH the plant and the (kinematic) vial to it — translating the whole
+    vial-with-plant assembly around the workspace. Forces a VISION actor to
+    LOCALIZE the plant instead of memorizing a fixed spawn (needed for a
+    deployable policy). ``pose_range`` x/y are absolute workspace coords.
+    """
+    if env_ids is None:
+        return
+    rx = tuple(pose_range.get("x", (0.0, 0.0)))
+    ry = tuple(pose_range.get("y", (0.0, 0.0)))
+    ryaw = tuple(pose_range.get("yaw", (0.0, 0.0)))
+    dev = env.device
+    plant = env.scene[plant_cfg.name]
+    vial = env.scene[vial_cfg.name]
+    for cur in env_ids.tolist():
+        x = float(torch.empty(1).uniform_(rx[0], rx[1]))
+        y = float(torch.empty(1).uniform_(ry[0], ry[1]))
+        yaw = float(torch.empty(1).uniform_(ryaw[0], ryaw[1]))
+        ids = torch.tensor([cur], device=dev)
+        origin = env.scene.env_origins[cur, 0:3]
+        for asset, z, yw in ((plant, plant_z, yaw), (vial, vial_z, 0.0)):
+            pos = torch.tensor([[x, y, z]], device=dev) + origin
+            quat = math_utils.quat_from_euler_xyz(
+                torch.zeros(1, device=dev),
+                torch.zeros(1, device=dev),
+                torch.tensor([yw], device=dev),
+            )
+            asset.write_root_pose_to_sim(torch.cat([pos, quat], dim=-1), env_ids=ids)
+            asset.write_root_velocity_to_sim(torch.zeros((1, 6), device=dev), env_ids=ids)
