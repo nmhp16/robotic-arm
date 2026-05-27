@@ -388,6 +388,22 @@ def object_on_target(
     return torch.logical_and(placed, gripper_open)
 
 
+def reward_pickable_dropped(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    minimum_height: float = -0.05,
+) -> torch.Tensor:
+    """1.0 on steps where the pickable has FALLEN below ``minimum_height`` (a
+    drop) — mirrors the ``pickable_dropping`` termination condition. Intended to
+    be used with a large NEGATIVE weight: in the real lab a dropped leaf is
+    CONTAMINATED, so dropping must be the WORST outcome — worse than failing to
+    complete / timing out. With a big drop penalty the policy learns to hold the
+    grip or abort safely (e.g. not attempt a slip-prone lift) rather than drop the
+    plant. Returns a (num_envs,) float in {0,1}."""
+    obj: RigidObject = env.scene[object_cfg.name]
+    return (obj.data.root_pos_w[:, 2] < minimum_height).to(torch.float32)
+
+
 # --- RL reward terms -------------------------------------------------------
 # These are shaped rewards for closed-loop RL fine-tuning. They run on every
 # step and return (num_envs,) tensors. Each returns a single scalar value

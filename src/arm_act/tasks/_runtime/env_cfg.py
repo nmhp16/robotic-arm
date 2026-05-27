@@ -213,6 +213,9 @@ def _apply_reward_params(
             min_stable_steps=min_stable_steps,
         )
     # action_l2_penalty needs no params.
+    # Drop-penalty mirrors the pickable_dropping termination height; weight set
+    # below from the yaml `rewards: drop_penalty:` (large negative = contamination).
+    rew.drop_penalty.params = dict(object_cfg=SceneEntityCfg("pickable"), minimum_height=-0.05)
 
     # Per-task weight overrides from the task yaml. Non-weight keys
     # (lift_height, success_termination) are consumed elsewhere and

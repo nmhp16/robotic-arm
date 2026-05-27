@@ -230,6 +230,11 @@ class RewardsCfg:
     lift_shaping = RewTerm(func=mdp.reward_lift_progress_dense, weight=0.0)
     success_bonus = RewTerm(func=mdp.reward_object_on_target, weight=50.0)
     action_l2_penalty = RewTerm(func=mdp.reward_action_penalty, weight=-0.001)
+    # Penalty for DROPPING the plant (root fell below minimum_height). Weight set
+    # negative via the task yaml `rewards:` block. A dropped leaf = contamination
+    # in the real lab, so this must dominate: dropping should be worse than failing
+    # to complete, so the policy learns to hold or abort rather than drop.
+    drop_penalty = RewTerm(func=mdp.reward_pickable_dropped, weight=0.0)
 
 
 @configclass

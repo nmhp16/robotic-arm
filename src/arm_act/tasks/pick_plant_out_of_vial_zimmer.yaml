@@ -20,7 +20,7 @@
 
 task:
   name: pick_plant_out_of_vial_zimmer
-  instruction: pick the plant out of the vial and lift it up
+  instruction: pick the plant out of the vial and place it into the empty vial
   gym_id: Isaac-PickPlantOutOfVialZimmer-T3-IK-Rel-v0
   mimic_gym_id: Isaac-PickPlantOutOfVialZimmer-T3-IK-Rel-Mimic-v0
 
@@ -89,7 +89,7 @@ objects:
     spawn:
       x: [0.31, 0.31]
       y: [-0.01, -0.01]
-      z: [0.035, 0.035]   # proven recessed-grasp config (rim ~105mm) — the wrist-cam-visible tall plant was ungraspable (1.56%), so we keep the recessed plant + use the fixed table_cam for vision
+      z: [0.0, 0.0]   # vial->vial WALLED well (2026-05-27): vial floor on the table so the plant sits INSIDE the well (was 0.035 raised, which with real walls would put the well floor ABOVE the plant). 4.5cm walls now physically contain the plant + force a real lift-out.
       yaw: [0.0, 0.0]
   plant:
     role: pickable
@@ -145,21 +145,24 @@ objects:
       # (b) disturbed the grasp. Spawning at rest removes both.
       z: [0.0, 0.0]
       yaw: [-0.2, 0.2]
-  tray:
+  # DESTINATION vial (2026-05-27): the real task is vial -> empty vial. The
+  # plant is picked from the source `vial` and PLACED into this second empty
+  # vial. Same wide_vial asset; fixed at a reachable spot near the source so the
+  # SCARA can transport without a long reach (the source is at 0.31,-0.01; this
+  # sits 0.15 m away in +y, same radius from the base). collision:true gives the
+  # well floor disc for the placed plant to rest on. role:target -> scene entity
+  # name "target", so the oracle PLACE phase + object_on_target success bind to it.
+  dest_vial:
     role: target
-    type: cuboid
-    size: [0.02, 0.02, 0.001]
-    mass: 0.001
-    color: [0.30, 0.40, 0.55]
+    type: usd
+    usd_path: local:assets/wide_vial/wide_vial.usd
+    scale: [1.0, 1.0, 1.0]
     kinematic: true
-    friction:
-      static: 1.0
-      dynamic: 0.8
-      restitution: 0.0
+    collision: true
     spawn:
-      x: [0.10, 0.10]
-      y: [0.30, 0.30]
-      z: [0.0005, 0.0005]
+      x: [0.31, 0.31]
+      y: [0.14, 0.14]
+      z: [0.0, 0.0]
       yaw: [0.0, 0.0]
 
 # Feed the fixed workcell table_cam (not the wrist cam) to the vision PPO. The
@@ -203,9 +206,13 @@ cameras:
 success:
   type: object_on_target
   object: plant
-  target: tray
-  xy_threshold: 0.05
-  height_threshold: 0.10
+  target: dest_vial
+  # PLACED-IN-VIAL: plant within 2cm of the dest-vial centre (inside the ~2cm-radius
+  # well) AND lowered (z within 6cm of the vial base, i.e. not held high) AND gripper
+  # OPEN (released). object_on_target already ANDs gripper-open, so this reads as
+  # "released into the destination well", not just "hovering over it".
+  xy_threshold: 0.02
+  height_threshold: 0.06
 grasp_check:
   type: object_grasped
   object: plant
@@ -224,7 +231,7 @@ rewards:
   approach_pickable: 5.0         # dense; CNN actor has no privileged plant
                                  # pose, so a weak (1.0) signal lets PPO
                                  # collapse action_std to the do-nothing min.
-  approach_target: 0.0           # transport is scripted, not RL-learned
+  approach_target: 2.0           # vial->vial: RL must learn transport to the dest vial
   grasp_bonus: 1.0               # +1/step when gripper closed AND TCP <3cm
                                  # of plant (camping-safe at this weight)
   lift_bonus: 10.0               # per-step lift_hold progress; makes a held
@@ -238,13 +245,19 @@ rewards:
                                  # lift_bonus so a full stable hold still wins.
   success_bonus: 1000.0          # one-shot terminal bonus on stable lift
   action_l2_penalty: -0.0001     # small; don't drown the approach signal
+  drop_penalty: -500.0           # CONTAMINATION avoidance: a dropped leaf is ruined
+                                 # in the real lab, so dropping must be the WORST
+                                 # outcome — well below a time-out (~0) and the
+                                 # success_bonus (+1000). Teaches the policy to hold
+                                 # the grip or ABORT safely rather than drop. Fires
+                                 # once when the plant falls below the drop height.
   lift_height: 0.030             # FIXED (was 0.10 — UNREACHABLE: oracle's best lift
                                  # was +0.08, plant maxes ~0.05, so success read 0
                                  # as a metric artifact). 0.030 = a clear stable
                                  # lift-OUT of the vial, matching the oracle's
                                  # honest z>=0.020 criterion. Reachable.
   lift_stable_steps: 5           # consecutive steps above threshold = success
-  success_termination: lifted    # episode ends on grasp + stable lift
+  success_termination: placed    # vial->vial: success = plant released INTO the dest vial (object_on_target), not just lifted
 
 # Scripted oracle. Hover height REDUCED from 0.10 → 0.06 because the
 # Zimmer body cuts the SCARA's effective vertical workspace. See URDF
@@ -258,7 +271,7 @@ oracle:
   hover_height: 0.05
   grasp_z_offset: 0.035
   lift_height: 0.07                           # the long-tip TCP ceiling (max upward reach)
-  place_z_offset: 0.0
+  place_z_offset: 0.04                        # vial->vial: lower the plant INTO the dest well (TCP to dest.z+0.04 ~ the grasp height) before release. Tune from the oracle smoke.
   max_dxy: 0.04
   max_dz: 0.02
   xy_reach_tol: 0.008                         # back to 38% config; tightening to
