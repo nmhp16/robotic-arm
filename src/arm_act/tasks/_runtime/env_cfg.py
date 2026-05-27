@@ -247,10 +247,16 @@ def _apply_reward_params(
     #    one camera per env to halve the descriptor cost.
     cameras = spec.get("cameras", {}) or {}
     pol = env_cfg.observations.policy
-    # Which cameras to strip: ALL in state-only mode; only non-wrist in
-    # vision mode.
+    # Which camera feeds the CNN actor-critic. Default wrist_cam; a task may set
+    # `vision_camera: table_cam` to use the fixed workcell cam instead — needed
+    # for pick_plant_out_of_vial_zimmer, where the wrist cam can't see the
+    # recessed plant and a wrist-cam-visible tall plant is ungraspable (1.56%);
+    # see vision_plant_renders_grey memory. A fixed cam is still sim2real-deployable.
+    vision_cam = spec.get("vision_camera", "wrist_cam")
+    # Which cameras to strip: ALL in state-only mode; only the non-vision cams
+    # in vision mode.
     cams_to_strip = list(cameras.keys()) if not enable_vision else [
-        c for c in cameras if c != "wrist_cam"
+        c for c in cameras if c != vision_cam
     ]
     for cam_name in cams_to_strip:
         if hasattr(pol, cam_name) and getattr(pol, cam_name) is not None:
@@ -263,8 +269,8 @@ def _apply_reward_params(
     # Vision RL: downsize the surviving wrist_cam from the IL default
     # 224x224 to 84x84 (Atari-style CNN input). 224x224 is overkill for
     # PPO + 4-DOF arm and triples the GPU memory / step time.
-    if enable_vision and hasattr(env_cfg.scene, "wrist_cam"):
-        wc = env_cfg.scene.wrist_cam
+    if enable_vision and getattr(env_cfg.scene, vision_cam, None) is not None:
+        wc = getattr(env_cfg.scene, vision_cam)
         if wc is not None:
             wc.height = 84
             wc.width = 84
@@ -289,7 +295,7 @@ def _apply_reward_params(
         # permutes; without it the CNN's conv math reads the wrong
         # axis and crashes with "Trying to create tensor with
         # negative dimension".
-        cam_obs = getattr(pol, "wrist_cam", None)
+        cam_obs = getattr(pol, vision_cam, None)
         if cam_obs is not None and hasattr(env_cfg.observations, "rgb_camera"):
             # When the task yaml has wrist_cam.depth: true, the camera
             # renders both rgb + distance_to_image_plane and we route a
@@ -297,7 +303,7 @@ def _apply_reward_params(
             # unambiguous "plant is X mm below" signal that pure RGB
             # struggles to extract from a dark workspace. Pure RGB path
             # (image_chw) is kept for tasks without depth.
-            has_depth = bool(cameras.get("wrist_cam", {}).get("depth"))
+            has_depth = bool(cameras.get(vision_cam, {}).get("depth"))
             cam_obs.func = mdp.image_rgbd_chw if has_depth else mdp.image_chw
             # Force normalize=True for the CNN path so the image comes
             # through as float in [-mean, 1-mean] instead of raw uint8.
@@ -306,8 +312,10 @@ def _apply_reward_params(
             # be the same" runtime error.
             cam_obs.params = dict(cam_obs.params or {})
             cam_obs.params["normalize"] = True
+            # Reuse the rgb_camera.wrist_cam slot regardless of which physical
+            # camera feeds it — the CNN reads the image, the slot name is cosmetic.
             env_cfg.observations.rgb_camera.wrist_cam = cam_obs
-            pol.wrist_cam = None
+            setattr(pol, vision_cam, None)
     # NOTE: leave env_cfg.observations.rgb_camera as the empty
     # configclass group — setting the whole group to None makes
     # ObservationManager dim-summing fail on construction.
@@ -871,12 +879,15 @@ def _build_camera_cfg(cam_name: str, cam: dict) -> CameraCfg:
     if cam.get("depth"):
         data_types.append("distance_to_image_plane")
 
-    # Use TiledCamera if this is the wrist_cam (the one vision-RL reads).
-    # TiledCamera renders ALL envs into one big tiled viewport (1 Vulkan
-    # descriptor for thousands of envs), as opposed to plain CameraCfg
-    # which spawns one viewport per env and blows the descriptor pool
-    # past ~64 envs.
-    cls = TiledCameraCfg if cam_name == "wrist_cam" else CameraCfg
+    # Use TiledCamera for the camera vision-RL reads. TiledCamera renders ALL
+    # envs into one big tiled viewport (1 Vulkan descriptor for thousands of
+    # envs), as opposed to plain CameraCfg which spawns one viewport per env and
+    # blows the descriptor pool past ~64-128 envs. Default: tiled for wrist_cam;
+    # a task feeding a different fixed cam to vision-RL (e.g. table_cam) sets
+    # `tiled: true` on that cam so it gets a TiledCamera too (else the per-env
+    # CameraCfg exhausted the RTX descriptor pool at 128-256 envs — see
+    # vision_plant_renders_grey memory).
+    cls = TiledCameraCfg if cam.get("tiled", cam_name == "wrist_cam") else CameraCfg
     return cls(
         prim_path=prim_path,
         update_period=0.0,

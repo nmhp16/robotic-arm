@@ -109,15 +109,20 @@ def randomize_plant_and_vial_together(
     vial_cfg: SceneEntityCfg = SceneEntityCfg("vial"),
     plant_z: float = 0.0,
     vial_z: float = 0.035,
+    intra_vial_xy: float = 0.005,
 ) -> None:
-    """Co-randomize the plant + vial by the SAME (x, y) offset per env.
+    """Place the vial per ``pose_range``; place the plant at the vial xy plus a
+    small random INTRA-VIAL offset (±``intra_vial_xy`` m) + yaw, so the plant
+    sits at a VARYING position within the well rather than pinned to the vial
+    centre.
 
-    The plant must stay inside the vial well, so independent randomization
-    would push it out. This samples ONE (x, y) per env (plus a plant yaw) and
-    writes BOTH the plant and the (kinematic) vial to it — translating the whole
-    vial-with-plant assembly around the workspace. Forces a VISION actor to
-    LOCALIZE the plant instead of memorizing a fixed spawn (needed for a
-    deployable policy). ``pose_range`` x/y are absolute workspace coords.
+    This matches reality — a real plant leans/sits off-centre in the vial — and
+    forces the policy (or a perception module) to localize the ACTUAL plant, not
+    assume "grasp the vial centre" (a sim crutch). The offset is kept within the
+    wide-vial well AND within the ~±1cm range the state policy was trained on, so
+    the pose-conditioned state policy still handles it. ``pose_range`` x/y are
+    absolute workspace coords. Set ``intra_vial_xy=0`` to restore the old
+    co-located (centred) behaviour.
     """
     if env_ids is None:
         return
@@ -131,10 +136,17 @@ def randomize_plant_and_vial_together(
         x = float(torch.empty(1).uniform_(rx[0], rx[1]))
         y = float(torch.empty(1).uniform_(ry[0], ry[1]))
         yaw = float(torch.empty(1).uniform_(ryaw[0], ryaw[1]))
+        dx = float(torch.empty(1).uniform_(-intra_vial_xy, intra_vial_xy))
+        dy = float(torch.empty(1).uniform_(-intra_vial_xy, intra_vial_xy))
         ids = torch.tensor([cur], device=dev)
         origin = env.scene.env_origins[cur, 0:3]
-        for asset, z, yw in ((plant, plant_z, yaw), (vial, vial_z, 0.0)):
-            pos = torch.tensor([[x, y, z]], device=dev) + origin
+        # (asset, z, yaw, x-offset, y-offset): the plant gets the intra-vial
+        # offset so it varies within the well; the vial stays at the sampled xy.
+        for asset, z, yw, ox, oy in (
+            (plant, plant_z, yaw, dx, dy),
+            (vial, vial_z, 0.0, 0.0, 0.0),
+        ):
+            pos = torch.tensor([[x + ox, y + oy, z]], device=dev) + origin
             quat = math_utils.quat_from_euler_xyz(
                 torch.zeros(1, device=dev),
                 torch.zeros(1, device=dev),

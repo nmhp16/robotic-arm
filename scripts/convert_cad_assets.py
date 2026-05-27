@@ -136,7 +136,7 @@ ASSETS = [
             '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
             '    </collision>'
         ),
-        "color_rgba": (0.5, 0.6, 0.5, 1.0),
+        "color_rgba": (0.72, 0.82, 0.92, 0.12),   # GLASS: low alpha → transparent, so the recessed stem shows THROUGH the vial walls (real vial is glass). The opaque grey vial was hiding the stem from every camera — likely the core perception fix.
     },
     {
         "stl": "leaf_plant",
@@ -148,7 +148,11 @@ ASSETS = [
         "friction": (6.0, 5.0, 0.0),   # 3->6: a real plant stem isn't slick; higher mu raises the static-friction limit so the grip holds against gravity through the LIFT (the dominant slip failure). Safe now that the V-groove stops lateral ejection.
         # Saturated green so the policy's vision backbone has a strong colour
         # signal to localize the pickable against the grey table/vial/tray.
-        "color_rgba": (0.15, 0.75, 0.20, 1.0),
+        # Vivid low-R/B green: the RTX render desaturates green ~5x (bright dome
+        # light + OmniPBR specular wash), so a moderate green came out pale mint
+        # (greenest pixel G/R only 1.09). Pushing R,B near 0 keeps it clearly
+        # green through the wash so the wrist-cam vision policy gets a strong cue.
+        "color_rgba": (0.04, 0.85, 0.06, 1.0),
         # Stem collision proxy for ACTUAL friction grip (2026-05-25).
         # Previously a 10 mm base stub (built for kinematic_attach, which grips
         # by root-to-TCP distance, not contact) — so there was nothing to close
@@ -181,19 +185,41 @@ ASSETS = [
         # this was a box before; the V-groove fixes that by cradling it.)
         # length 0.040 * spawn z-scale 0.6 = 0.024 m world, centred at world
         # z=0.058*0.6=0.035 (the grasp height). radius 0.003 = 6mm dia.
-        # ROUND 6mm stem for the V-groove grip. Z-form-closure (node + fingertip
-        # ledge) was built TWICE to defeat the vertical lift-slip — node-on-prong
-        # -tops (33%) and node-on-proper-solid-ledge (25%) — NEITHER beat the 40%
-        # V-groove+mu6 config on large samples. The ledge doesn't reliably catch
-        # the node (the oracle's grasp variation + sim contact non-determinism
-        # mean the node rarely lands on the small shelf). Reverted. See
-        # grasp_friction_ceiling memory: ~40% is the real-friction ceiling here.
+        # ROUND 6mm stem for the V-groove grip, over the recessed lower-stem
+        # region (z 0.058 center, 40mm long → world ~0.035 grasp height at the
+        # task's 0.6 z-squash). This is the PROVEN recessed-grasp collider (~80%
+        # state PPO). A full-stem collider for a tall visible plant was tried but
+        # the tall plant is ungraspable (1.56%, lever-arm lift-slip), so we keep
+        # the recessed plant + fixed table_cam for vision (vision_plant_renders_grey
+        # memory). Z-form ledge tried twice (33%/25%), never beat 40% V-groove+mu6.
+        # MULTI-NODE stem (2026-05-26): smooth 6mm grasp cylinder + 3 collision-
+        # only 8mm "leaf nodes" (unscaled z 0.050/0.062/0.074, ×0.6 squash →
+        # world 0.030/0.037/0.044) bracketing the grasp valley. FORM-CLOSURE vs
+        # lift-slip: an 8mm node can't pass the ~6mm closed jaws, so on any axial
+        # slip the next node JAMS — a hard geometric stop at any grasp height
+        # (μ-INDEPENDENT, so it sidesteps the friction ceiling that caps the
+        # smooth-stem grip ~60%). Unlike the single node+ledge (25/33%, needed
+        # ~1mm precise seating), nodes throughout catch regardless of grasp z.
+        # Nodes are COLLISION-ONLY; the leafy VISUAL mesh is unchanged so it
+        # still reads as a plant (node swellings hidden in the foliage).
         "collision_override": (
             '<collision>\n'
             '      <origin xyz="0 0 0.058" rpy="0 0 0"/>\n'
             '      <geometry>\n'
             '        <cylinder radius="0.003" length="0.040"/>\n'
             '      </geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'
+            '      <origin xyz="0 0 0.050" rpy="0 0 0"/>\n'
+            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'
+            '      <origin xyz="0 0 0.062" rpy="0 0 0"/>\n'
+            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
+            '    </collision>\n'
+            '    <collision>\n'
+            '      <origin xyz="0 0 0.074" rpy="0 0 0"/>\n'
+            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
             '    </collision>'
         ),
     },
@@ -294,6 +320,79 @@ def _bake_friction_into_usd(usd_path: str, friction: tuple) -> None:
     print(f">>>   baked friction (s={static} d={dynamic} r={restitution}) on {bound} collision prim(s)", flush=True)
 
 
+def _bake_visual_color_into_usd(usd_path: str, color_rgba: tuple) -> None:
+    """Author a visible VISUAL material on the converted mesh.
+
+    Isaac Lab's UrdfConverter drops the URDF ``<material><color>`` — it binds
+    an EMPTY ``DefaultMaterial`` (shaderId=None, no diffuse) to the visual
+    mesh, so the renderer falls back to a flat grey. That silently killed the
+    "saturated green so the vision backbone has a strong colour cue" intent:
+    the wrist cam saw a grey plant on a grey table (0 green pixels), which is
+    a big part of why the vision policy can't localise it.
+
+    Mirror ``_bake_friction_into_usd``: open the geometry layer
+    (``configuration/<name>_base.usd``, where the Mesh + DefaultMaterial
+    actually live — the top .usd doesn't expose them) and (a) fill every
+    Shader as a UsdPreviewSurface with diffuseColor = color, and (b) set the
+    mesh ``displayColor`` primvar as a fallback. Re-applied every conversion.
+    """
+    from pxr import Gf, Sdf, Usd, UsdGeom, UsdShade  # type: ignore
+
+    r, g, b, a = color_rgba
+    base = os.path.join(
+        os.path.dirname(usd_path), "configuration",
+        os.path.splitext(os.path.basename(usd_path))[0] + "_base.usd",
+    )
+    target = base if os.path.isfile(base) else usd_path
+    stage = Usd.Stage.Open(target)
+    if stage is None:
+        raise RuntimeError(f"could not open USD for visual bake: {target}")
+
+    # Material depends on alpha. RTX ignores UsdPreviewSurface OPACITY (renders
+    # opaque — verified), so for a transparent asset (a<1) we author OmniGlass.mdl
+    # (RTX-native glass) so the real vial reads as GLASS and the recessed stem is
+    # visible THROUGH its walls (the perception fix). For opaque assets (a==1) we
+    # use a UsdPreviewSurface bound strongerThanDescendants — light + RTX honors
+    # its diffuseColor (the earlier grey render was a binding-strength loss, not a
+    # shader issue; see vision_plant_renders_grey memory).
+    UsdGeom.Scope.Define(stage, "/_VisualLooks")
+    if a < 1.0:
+        mat = UsdShade.Material.Define(stage, "/_VisualLooks/GlassMat")
+        shader = UsdShade.Shader.Define(stage, "/_VisualLooks/GlassMat/Shader")
+        shader.SetSourceAsset(Sdf.AssetPath("OmniGlass.mdl"), "mdl")
+        shader.SetSourceAssetSubIdentifier("OmniGlass", "mdl")
+        shader.CreateInput("glass_color", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(r, g, b))
+        shader.CreateInput("glass_ior", Sdf.ValueTypeNames.Float).Set(1.1)        # near-1 → minimal refraction so the stem behind isn't warped
+        shader.CreateInput("thin_walled", Sdf.ValueTypeNames.Bool).Set(True)      # thin vial wall
+        shader.CreateInput("frosting_roughness", Sdf.ValueTypeNames.Float).Set(0.0)  # clear, not frosted
+        mat.CreateSurfaceOutput("mdl").ConnectToSource(shader.ConnectableAPI(), "out")
+        mat_kind = "OmniGlass(MDL)"
+    else:
+        mat = UsdShade.Material.Define(stage, "/_VisualLooks/PreviewColor")
+        shader = UsdShade.Shader.Define(stage, "/_VisualLooks/PreviewColor/Shader")
+        shader.CreateIdAttr("UsdPreviewSurface")
+        shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(r, g, b))
+        shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(0.7)
+        shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+        mat_kind = "UsdPreviewSurface"
+
+    meshes = 0
+    for prim in stage.Traverse():
+        if prim.IsA(UsdGeom.Mesh):
+            UsdShade.MaterialBindingAPI(prim).Bind(
+                mat, bindingStrength=UsdShade.Tokens.strongerThanDescendants
+            )
+            UsdGeom.Gprim(prim).CreateDisplayColorAttr().Set([Gf.Vec3f(r, g, b)])  # viewport fallback
+            meshes += 1
+
+    stage.Save()
+    print(
+        f">>>   baked {mat_kind} visual color rgba={color_rgba} on {meshes} mesh(es) in {os.path.basename(target)}",
+        flush=True,
+    )
+
+
 def convert(
     stl_basename: str,
     asset_dir_name: str,
@@ -392,6 +491,7 @@ def convert(
         print(f">>> {asset_dir_name}: {converter.usd_path}", flush=True)
         if friction is not None:
             _bake_friction_into_usd(converter.usd_path, friction)
+        _bake_visual_color_into_usd(converter.usd_path, color_rgba)
     finally:
         os.unlink(urdf_path)
 

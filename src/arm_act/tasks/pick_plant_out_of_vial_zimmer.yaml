@@ -60,7 +60,7 @@ robot:
   init_joint_pos:
     joint_1: 0.554
     joint_2: -1.381
-    joint_3: 0.02
+    joint_3: 0.02   # small slack from the j3=0 upper limit so jitter stays in range; TCP hovers above the grasp, wrist cam ~160mm higher looks down on the now-visible green plant top
     joint_4: 0.0
   # Friction grip — NO kinematic_attach shortcut. This is the real-robot-
   # deployable variant. The Zimmer's high grip force + long-finger inertia
@@ -75,6 +75,11 @@ objects:
     role: distractor
     type: usd
     usd_path: local:assets/wide_vial/wide_vial.usd
+    # Real vial = 7cm tall (fixed manufacturer part — keep at full height). It
+    # sits on the table (spawn z=0 → rim at 70mm). The PLANT is sized to match
+    # so its stem+foliage clear the rim and the wrist cam can SEE it (2026-05-26:
+    # with the plant recessed 57mm below the rim the wrist cam saw only grey rim
+    # → vision PPO stuck at 8%).
     scale: [1.0, 1.0, 1.0]
     kinematic: true
     collision: true    # enable the hollow-well collision (the fixture that holds the plant)
@@ -84,7 +89,7 @@ objects:
     spawn:
       x: [0.31, 0.31]
       y: [-0.01, -0.01]
-      z: [0.035, 0.035]
+      z: [0.035, 0.035]   # proven recessed-grasp config (rim ~105mm) — the wrist-cam-visible tall plant was ungraspable (1.56%), so we keep the recessed plant + use the fixed table_cam for vision
       yaw: [0.0, 0.0]
   plant:
     role: pickable
@@ -112,7 +117,12 @@ objects:
     # leaf_plant_compliant, add `articulated: true` + a `spring:` block,
     # scale [1,1,1] (see git history).
     usd_path: local:assets/leaf_plant/leaf_plant.usd
-    scale: [1.0, 1.0, 0.6]   # z-squash to ~48mm so the plant is SHORTER than the 70mm vial (recessed inside)
+    # z-squash to ~48mm: SHORTER than the vial so it sits recessed + graspable
+    # (proven ~80% state PPO / 40% oracle). The tall un-squashed plant was wrist-
+    # cam-visible but ungraspable (lever-arm lift-slip, 1.56% — see
+    # vision_plant_renders_grey memory), so we keep the recessed plant and use
+    # the fixed table_cam (which sees the vial) for the deployable vision policy.
+    scale: [1.0, 1.0, 0.6]
     friction:
       static: 3.0
       dynamic: 2.5
@@ -152,13 +162,29 @@ objects:
       z: [0.0005, 0.0005]
       yaw: [0.0, 0.0]
 
+# Feed the fixed workcell table_cam (not the wrist cam) to the vision PPO. The
+# wrist cam can't see the recessed plant, and a wrist-cam-visible tall plant is
+# ungraspable (1.56% — see vision_plant_renders_grey memory). The table_cam sees
+# the green plant + vial for localization; the recessed plant grasps reliably.
+# A fixed workcell camera is still sim2real-deployable.
+vision_camera: table_cam
+
 cameras:
   table_cam:
-    pos: [1.0, 0.0, 0.8]
+    # Moved CLOSER along the same view ray (was [1.0,0,0.8], ~1.1m away) to
+    # ~0.4m from the vial — same viewing angle (rot unchanged), but a tight
+    # crop around the vial instead of the whole workcell. That cuts the
+    # objects-in-frustum (floor, arm base/links) → far fewer per-view culling
+    # descriptors, so the fixed cam fits many envs (the wide view exhausted the
+    # RTX descriptor pool even at 128 — see vision_plant_renders_grey memory).
+    # Also gives a bigger, clearer vial/green-plant for localization.
+    pos: [0.58, 0.0, 0.35]
     rot: [0.35355, -0.61237, -0.61237, 0.35355]
     focal_length: 18.0
     horizontal_aperture: 20.955
     clipping_range: [0.1, 4.0]
+    depth: true    # RGBD (4-ch) for the vision CNN — matches the channel count the wrist-cam path used
+    tiled: true    # TiledCamera (1 tiled viewport for all envs) — this is the vision-RL camera now, so it must tile or the per-env CameraCfg exhausts the RTX descriptor pool at scale
   wrist_cam:
     parent: tool0_aligned
     # Offset 8cm (vs put_plant_back's 5cm) because the Zimmer body is

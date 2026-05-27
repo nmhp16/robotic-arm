@@ -170,12 +170,53 @@ def wrist_center_depth(
     return med.view(-1, 1)
 
 
+# Optional plant-position obs noise, set via PLANT_POS_NOISE (m, std) env var.
+# Used to evaluate the detector->state deployable pipeline: inject the green-
+# plant detector's measured localization error as xy noise on the privileged
+# plant pose, so eval of the state policy under this noise estimates the
+# deployable "detect-then-pick" success. Default 0 (no effect on training).
+import os as _os
+_PLANT_NOISE_STD = float(_os.environ.get("PLANT_POS_NOISE", "0.0"))
+_PLANT_BIAS_STD = float(_os.environ.get("PLANT_POS_BIAS", "0.0"))
+
+
+def _plant_pos_bias(env) -> "torch.Tensor | None":
+    """Per-env plant-xy bias FROZEN at each episode reset (resampled only when
+    episode_length_buf==0). Models a PERCEPTION MODULE that localizes the plant
+    ONCE per episode with a fixed error — unlike _PLANT_NOISE_STD, which redraws
+    every step (a sensor-jitter model). A pose estimator's error is a constant
+    offset for the whole grasp, so the policy commits to a consistently-wrong
+    target; that is a harder, more realistic perturbation than zero-mean per-step
+    noise (which averages out over the approach). Used to estimate the deployable
+    detect->pick rate with the green-plant detector's measured ~2mm error."""
+    if _PLANT_BIAS_STD <= 0.0:
+        return None
+    cs = int(env.common_step_counter)
+    if getattr(env, "_ppb_step", -1) != cs:
+        if not hasattr(env, "_ppb") or env._ppb.shape[0] != env.num_envs:
+            env._ppb = torch.zeros((env.num_envs, 2), device=env.device)
+        rm = env.episode_length_buf == 0
+        if rm.any():
+            env._ppb[rm] = torch.randn((int(rm.sum()), 2), device=env.device) * _PLANT_BIAS_STD
+        env._ppb_step = cs
+    return env._ppb
+
+
 def object_position(
     env: ManagerBasedRLEnv,
     object_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
 ) -> torch.Tensor:
     obj: RigidObject = env.scene[object_cfg.name]
-    return obj.data.root_pos_w - env.scene.env_origins
+    pos = obj.data.root_pos_w
+    if object_cfg.name == "pickable":
+        bias = _plant_pos_bias(env)
+        if _PLANT_NOISE_STD > 0.0 or bias is not None:
+            pos = pos.clone()
+            if _PLANT_NOISE_STD > 0.0:
+                pos[:, :2] += torch.randn_like(pos[:, :2]) * _PLANT_NOISE_STD
+            if bias is not None:
+                pos[:, :2] += bias
+    return pos - env.scene.env_origins
 
 
 def object_orientation(
@@ -197,6 +238,13 @@ def object_obs(
     ee_frame: FrameTransformer = env.scene[ee_frame_cfg.name]
 
     obj_pos_w = obj.data.root_pos_w
+    bias = _plant_pos_bias(env)
+    if _PLANT_NOISE_STD > 0.0 or bias is not None:
+        obj_pos_w = obj_pos_w.clone()
+        if _PLANT_NOISE_STD > 0.0:
+            obj_pos_w[:, :2] += torch.randn_like(obj_pos_w[:, :2]) * _PLANT_NOISE_STD
+        if bias is not None:
+            obj_pos_w[:, :2] += bias
     obj_quat_w = obj.data.root_quat_w
     target_pos_w = target.data.root_pos_w
     ee_pos_w = ee_frame.data.target_pos_w[:, 0, :]
