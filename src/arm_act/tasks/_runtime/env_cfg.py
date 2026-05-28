@@ -25,6 +25,7 @@ from isaaclab.envs.mdp.actions.actions_cfg import (
     BinaryJointPositionActionCfg,
     DifferentialInverseKinematicsActionCfg,
 )
+from arm_act.tasks._runtime.actions import BinaryJointEffortActionCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import SceneEntityCfg
@@ -610,14 +611,29 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, tcp_z]),
     )
     gripper_joints = list(robot_cfg["gripper_joints"])
-    open_cmd = {n: float(robot_cfg["gripper_open_m"]) for n in gripper_joints}
-    close_cmd = {n: float(robot_cfg["gripper_close_m"]) for n in gripper_joints}
-    env_cfg.actions.gripper_action = BinaryJointPositionActionCfg(
-        asset_name="robot",
-        joint_names=gripper_joints,
-        open_command_expr=open_cmd,
-        close_command_expr=close_cmd,
-    )
+    gripper_control = str(robot_cfg.get("gripper_control", "position"))
+    if gripper_control == "effort":
+        # Force-controlled gripper: open/close command is a constant effort
+        # (N for prismatic, Nm for revolute) regardless of stem thickness.
+        # Pair with stiffness=0 + low-damping actuator (see robot_cfg.py
+        # zimmer_fingers) so the joint settles under the commanded force.
+        open_cmd = {n: float(robot_cfg["gripper_open_N"]) for n in gripper_joints}
+        close_cmd = {n: float(robot_cfg["gripper_close_N"]) for n in gripper_joints}
+        env_cfg.actions.gripper_action = BinaryJointEffortActionCfg(
+            asset_name="robot",
+            joint_names=gripper_joints,
+            open_command_expr=open_cmd,
+            close_command_expr=close_cmd,
+        )
+    else:
+        open_cmd = {n: float(robot_cfg["gripper_open_m"]) for n in gripper_joints}
+        close_cmd = {n: float(robot_cfg["gripper_close_m"]) for n in gripper_joints}
+        env_cfg.actions.gripper_action = BinaryJointPositionActionCfg(
+            asset_name="robot",
+            joint_names=gripper_joints,
+            open_command_expr=open_cmd,
+            close_command_expr=close_cmd,
+        )
 
     # --- Cameras ------------------------------------------------------------
     for cam_name, cam in cameras.items():
@@ -779,10 +795,20 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
         )
 
     if obj_type == "usd":
-        rigid_props = RigidBodyPropertiesCfg(
+        # Optional `linear_damping` / `angular_damping` from yaml — PhysX rigid
+        # body damping coefficients (1/s) applied to linear/angular velocity.
+        # Use angular_damping to kill spurious spin on a held rigid object
+        # whose collision proxy doesn't have an anti-rotation feature; use
+        # linear_damping sparingly (it slows free-fall and free-fly too).
+        rb_kwargs: dict[str, object] = dict(
             kinematic_enabled=bool(obj.get("kinematic", False)),
             disable_gravity=bool(obj.get("kinematic", False)),
         )
+        if obj.get("linear_damping") is not None:
+            rb_kwargs["linear_damping"] = float(obj["linear_damping"])
+        if obj.get("angular_damping") is not None:
+            rb_kwargs["angular_damping"] = float(obj["angular_damping"])
+        rigid_props = RigidBodyPropertiesCfg(**rb_kwargs)
         # Optional `collision: false` in YAML disables collision for this
         # asset. Useful for kinematic decoration that the policy shouldn't
         # interact with physically — e.g. a hollow vial whose convex
@@ -810,13 +836,20 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
         # read .data.root_pos_w (the base link) — same convention as rigid.
         if obj.get("articulated"):
             spring = obj.get("spring") or {}
+            # `spring.joint` is a regex pattern that matches one OR many joint
+            # names. For the single-spring leaf_plant_compliant, it's the literal
+            # name "stem_bend". For the multi-segment leaf_plant_segmented, it
+            # matches all bend joints (e.g. "seg_joint_.*"), and ONE actuator
+            # with the same stiffness applies to every matched joint.
             spring_joint = str(spring.get("joint", "stem_bend"))
+            # Optional explicit init joint positions (default: URDF zeros).
+            init_joint_pos = dict(spring.get("init_joint_pos") or {})
             return ArticulationCfg(
                 prim_path=prim_path,
                 init_state=ArticulationCfg.InitialStateCfg(
                     pos=list(init_pos),
                     rot=[1, 0, 0, 0],
-                    joint_pos={spring_joint: 0.0},
+                    joint_pos=init_joint_pos,
                 ),
                 spawn=UsdFileCfg(
                     usd_path=usd_full,

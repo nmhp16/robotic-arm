@@ -141,7 +141,7 @@ ASSETS = [
     {
         "stl": "leaf_plant",
         "asset_dir": "leaf_plant",
-        "mass": 0.002,
+        "mass": 0.002,   # reverted to 2g: the 10g experiment made the IK too slow during MOVE phase (SCARA couldn't traverse to dest vial in 400 sim steps; 5/5 timeouts). Swinging is a smaller problem than no-transport-at-all.
         "kinematic": False,
         "scale": 0.001,
         "collider": "convex_decomposition",
@@ -220,6 +220,18 @@ ASSETS = [
             '    <collision>\n'
             '      <origin xyz="0 0 0.074" rpy="0 0 0"/>\n'
             '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
+            '    </collision>\n'
+            # Leaf-canopy disk: gives the foliage a thin physical presence so it
+            # can contact the vial walls (stops visual leaves from clipping
+            # through) and so wall friction resists rotation. Radius 4.5 mm
+            # leaves 0.5 mm clearance from the gripper's open-jaw inner face
+            # (gripper-x = ±5 mm), so the disk doesn't block DESCEND. With the
+            # task z-scale 0.5 the disk lands at world z ≈ 0.035 (mid-leaves)
+            # and is 1.5 mm thick — inside the vial bore (r=10 mm) at the
+            # grasp height, then clears the rim during LIFT.
+            '    <collision>\n'
+            '      <origin xyz="0 0 0.070" rpy="0 0 0"/>\n'
+            '      <geometry><cylinder radius="0.0045" length="0.003"/></geometry>\n'
             '    </collision>'
         ),
     },

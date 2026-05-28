@@ -251,19 +251,23 @@ def _t3_401_zimmer() -> ArticulationCfg:
                 friction=0.0,
                 armature=0.0,
             ),
-            # Zimmer GEP2010IL grip force is 50-200 N. The PD controller
-            # delivers approximate force = stiffness × position-error. With
-            # stiffness=12000 and a typical 1 mm overshoot past contact, force
-            # ≈ 12 N — too light for a 200 N industrial gripper. Bumping
-            # stiffness to 80000 puts the realistic per-mm force at ~80 N,
-            # matching the lower end of Zimmer's spec. damping=200 keeps
-            # the closing motion stable without oscillation.
+            # Zimmer GEP2010IL grip force is 50-200 N. FORCE-CONTROL config
+            # (2026-05-28): stiffness=0 + low damping = no PD position term, so
+            # the joint position settles wherever the world allows under the
+            # commanded effort. Pair with BinaryJointEffortActionCfg in env_cfg
+            # to command a constant force on close (e.g., 200 N) regardless of
+            # stem thickness — the proper actuator model for a force-controlled
+            # parallel-jaw gripper. Prior position-controlled config saturated
+            # to ~500 N via stiffness=80000 × ~6mm position error, which was
+            # too stiff against the round stem (geometric ejection — see
+            # grasp_friction_ceiling memory). Effort_limit_sim=200 caps at
+            # Zimmer's datasheet maximum.
             "zimmer_fingers": ImplicitActuatorCfg(
                 joint_names_expr=["finger_.*_joint"],
-                effort_limit_sim=500.0,
+                effort_limit_sim=200.0,
                 velocity_limit_sim=0.1,
-                stiffness=80000.0,
-                damping=200.0,
+                stiffness=0.0,
+                damping=5.0,
                 friction=0.0,
                 armature=0.0,
             ),

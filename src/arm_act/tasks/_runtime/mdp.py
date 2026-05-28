@@ -31,6 +31,11 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
 
+# Module-level counter for the `object_on_target` diagnostic print (capped
+# at 10 firings ever, so it's safe to leave on between runs without spamming).
+_object_on_target_diag_count: int = 0
+
+
 def image_chw(
     env,
     sensor_cfg: SceneEntityCfg = SceneEntityCfg("tiled_camera"),
@@ -369,23 +374,50 @@ def object_on_target(
     height_threshold: float = 0.06,
     driver_joint: str = "finger_left_joint",
     closed_threshold: float = 0.02,
+    height_min: float = -0.05,
 ) -> torch.Tensor:
     """True when the object sits within (xy, height) thresholds of the target
-    AND the gripper is open."""
+    AND the gripper is open — i.e., physically placed in the dest container.
+    """
     obj: RigidObject = env.scene[object_cfg.name]
     target: RigidObject = env.scene[target_cfg.name]
 
     pos_diff = obj.data.root_pos_w - target.data.root_pos_w
     xy_dist = torch.linalg.vector_norm(pos_diff[:, :2], dim=1)
 
-    placed = torch.logical_and(xy_dist < xy_threshold, pos_diff[:, 2] < height_threshold)
-    placed = torch.logical_and(placed, pos_diff[:, 2] > -0.02)
+    xy_ok = xy_dist < xy_threshold
+    z_below = pos_diff[:, 2] < height_threshold
+    z_above = pos_diff[:, 2] > height_min
+    placed = torch.logical_and(xy_ok, z_below)
+    placed = torch.logical_and(placed, z_above)
 
     pos = _gripper_drive_pos(env, driver_joint)
-    if pos is None:
-        return placed
-    gripper_open = pos < closed_threshold
-    return torch.logical_and(placed, gripper_open)
+    gripper_open_check: torch.Tensor | None = None
+    if pos is not None:
+        gripper_open_check = pos < closed_threshold
+        placed = torch.logical_and(placed, gripper_open_check)
+
+    # Diagnostic: print the first 10 firings with the numbers that triggered
+    # it. If an early/wrong fire shows up, the print catches it at the source
+    # — we don't paper over it with a step gate.
+    global _object_on_target_diag_count
+    if _object_on_target_diag_count < 10 and bool(placed.any()):
+        fired = placed.nonzero(as_tuple=False).flatten().tolist()
+        for env_id in fired:
+            if _object_on_target_diag_count >= 10:
+                break
+            _object_on_target_diag_count += 1
+            go = "?" if gripper_open_check is None else bool(gripper_open_check[env_id])
+            print(
+                f"[object_on_target #{_object_on_target_diag_count}] "
+                f"env={env_id} step={int(env.episode_length_buf[env_id])} "
+                f"xy_dist={float(xy_dist[env_id]):.4f} "
+                f"z_diff={float(pos_diff[env_id, 2]):.4f} "
+                f"gripper_open={go}",
+                flush=True,
+            )
+
+    return placed
 
 
 def reward_pickable_dropped(
