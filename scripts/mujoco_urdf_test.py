@@ -25,6 +25,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 URDF_PATH = REPO_ROOT / "assets" / "t3_401_zimmer" / "t3_401_zimmer.urdf"
 MESH_DIR  = REPO_ROOT / "assets" / "t3_401_zimmer" / "meshes"
 VIAL_STL  = REPO_ROOT / "assets" / "wide_vial" / "meshes" / "wide_vial.stl"
+PLANT_STL = REPO_ROOT / "assets" / "leaf_plant" / "meshes" / "leaf_plant.stl"
 MEDIA_DIR = REPO_ROOT / "media"
 
 # ── SCARA geometry (verified by FK sweep) ─────────────────────────────────
@@ -52,6 +53,7 @@ DESCEND_STEPS   = 5000   # 1.0 s
 CLOSE_STEPS     = 3000   # 0.6 s
 HOLD_STEPS      = 2000   # 0.4 s
 LIFT_STEPS      = 3000   # 0.6 s
+ESCAPE_STEPS    = 1500   # 0.3 s — hold at max height above source vial before lateral move
 TRANSPORT_STEPS = 6000   # 1.2 s
 INSERT_STEPS    = 4000   # 0.8 s
 RELEASE_STEPS   = 2000   # 0.4 s
@@ -59,7 +61,7 @@ CHECK_STEPS     = 3000   # 0.6 s
 
 # ── Initial joint positions (from YAML init_joint_pos) ────────────────────
 INIT_J1, INIT_J2, INIT_J3 = 0.554, -1.381, 0.02
-J3_LIFT = 0.002   # near j3-min (arm at max height) for clearance over vial rim
+J3_LIFT = 0.000   # j3=0 = fully retracted; prong tip at 80 mm → plant body clears 45 mm rim
 
 
 # ── SCARA IK ──────────────────────────────────────────────────────────────
@@ -140,10 +142,11 @@ def _build_xml() -> str:
   </option>
   <size njmax="500" nconmax="500"/>
   <asset>
-    <mesh name="wide_vial" file="{VIAL_STL}" scale="0.001 0.001 0.000643"/>{vis_mesh_assets}
+    <mesh name="wide_vial"  file="{VIAL_STL}"  scale="0.001 0.001 0.000643"/>
+    <mesh name="leaf_plant" file="{PLANT_STL}" scale="0.001 0.001 0.000562"/>{vis_mesh_assets}
   </asset>
   <default>
-    <geom condim="6" friction="3.0 0.01 0.001"
+    <geom condim="6" friction="0.8 0.005 0.0001"
           solimp="0 0.999 0.0001 0.5 2" solref="0.0005 1"/>
   </default>"""
     mjcf = re.sub(
@@ -209,17 +212,19 @@ def _build_xml() -> str:
           friction="0.5 0.005 0.0001"/>
     <body name="plant" pos="{SRC_X} {SRC_Y} 0">
       <freejoint name="plant_freejoint"/>
-      <inertial pos="0 0 0.025" mass="0.002" diaginertia="8e-8 8e-8 1e-8"/>
-      <geom name="stem"  type="cylinder" pos="0 0 0.029" size="0.003 0.010"
-            friction="3.0 0.01 0.001" rgba="0.35 0.60 0.20 1"/>
-      <geom name="node1" type="cylinder" pos="0 0 0.025" size="0.004 0.00125"
-            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
-      <geom name="node2" type="cylinder" pos="0 0 0.031" size="0.004 0.00125"
-            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
-      <geom name="node3" type="cylinder" pos="0 0 0.037" size="0.004 0.00125"
-            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
-      <geom type="sphere" pos="0 0 0.040" size="0.011"
-            rgba="0.15 0.70 0.10 0.8" contype="0" conaffinity="0"/>
+      <inertial pos="0 0 0.035" mass="0.0005" diaginertia="1e-8 1e-8 1e-9"/>
+      <!-- root: floor-contact only, keeps body origin at world z≈0 -->
+      <geom name="root" type="cylinder" pos="0 0 0.001" size="0.003 0.001"
+            rgba="0.2 0.1 0.0 0"/>
+      <!-- stem: gripping zone world z=30-40mm (near top of vial, inside) -->
+      <geom name="stem" type="cylinder" pos="0 0 0.035" size="0.003 0.005"
+            friction="0.8 0.005 0.0001" rgba="0.35 0.60 0.20 0"/>
+      <body name="plant_leaves" pos="0 0 0.040">
+        <joint name="plant_bend" type="ball" stiffness="0.001" damping="0.0001"/>
+        <inertial pos="0 0 0.007" mass="0.0015" diaginertia="5e-7 5e-7 1e-8"/>
+        <geom type="mesh" mesh="leaf_plant" pos="0 0 -0.040"
+              rgba="0.35 0.60 0.20 1" contype="0" conaffinity="0"/>
+      </body>
     </body>
     <body name="source_vial" pos="{SRC_X} {SRC_Y} 0">
       <geom type="mesh" mesh="wide_vial" rgba="0.85 0.90 0.95 0.35"
@@ -262,14 +267,10 @@ def _build_xml() -> str:
     <position name="j2_act" joint="joint_2" kp="1200" kv="70"/>
     <position name="j3_act" joint="joint_3" kp="4000" kv="80"/>
     <position name="j4_act" joint="joint_4" kp="200"  kv="20"/>
-    <position name="fl_act" joint="finger_left_joint"  kp="25000" kv="10" ctrlrange="0 0.010"/>
-    <position name="fr_act" joint="finger_right_joint" kp="25000" kv="10" ctrlrange="0 0.010"/>
+    <position name="fl_act" joint="finger_left_joint"  kp="1200" kv="10" ctrlrange="0 0.010"/>
+    <position name="fr_act" joint="finger_right_joint" kp="1200" kv="10" ctrlrange="0 0.010"/>
   </actuator>
-  <equality>
-    <weld name="plant_attach" body1="link_4" body2="plant"
-          active="false"
-          solref="0.001 1" solimp="0 0.9999 0.001 0.5 2"/>
-  </equality>"""
+"""
     mjcf = re.sub(
         r'(</mujoco>)',
         lambda m: inject_before_end + '\n' + m.group(1),
@@ -320,11 +321,7 @@ def run_urdf_test(
     fl_jnt   = _jid("finger_left_joint")
     j1_jnt, j2_jnt, j3_jnt, j4_jnt = _jid("joint_1"), _jid("joint_2"), _jid("joint_3"), _jid("joint_4")
 
-    E = mujoco.mjtObj.mjOBJ_EQUALITY
-    def _eid(n): return mujoco.mj_name2id(model, E, n)
     link4_id = _bid("link_4")
-    weld_id  = _eid("plant_attach")
-    data.eq_active[weld_id] = 0  # start inactive; activated before transport
 
     # Init arm joints by address — plant freejoint occupies qpos[0:7]
     data.qpos[model.jnt_qposadr[j1_jnt]] = INIT_J1
@@ -383,7 +380,7 @@ def run_urdf_test(
     _step(SETTLE_STEPS)
 
     _, _, pz_settled = _ppos()
-    stem_z  = pz_settled + 0.029  # plant stem centre world-z
+    stem_z  = pz_settled + 0.035  # stem geom centre world-z (body z=0.035, near top of vial)
     j3_g    = LINK4_Z_J3_0 - PRONG_BELOW_L4 - stem_z   # j3 for prong at stem
     j3_ins  = j3_g   # same depth in dest vial (same floor height)
 
@@ -419,27 +416,19 @@ def run_urdf_test(
 
     _, _, pz_lift = _ppos()
     if verbose:
-        stem_bottom = pz_lift + 0.019   # stem geom bottom in world z (pos=0.029 − half=0.010)
+        stem_bottom = pz_lift + 0.030   # stem geom bottom in world z (pos=0.035 − half=0.005)
         cleared = "YES ✓" if stem_bottom > VIAL_HEIGHT else "NO ✗"
         print(f"  [after lift]     plant_z={pz_lift*1000:.1f} mm  "
               f"stem_bottom={stem_bottom*1000:.1f} mm  "
               f"cleared {VIAL_HEIGHT*1000:.0f} mm rim: {cleared}")
 
-    # ── Phase 5: transport ────────────────────────────────────────────────
-    # Activate kinematic_attach: weld plant to link_4 for the duration of transport
-    # and insert. Mirrors use_kinematic_attach=True in pick_plant_out_of_vial_zimmer.yaml.
-    # Without this, MuJoCo's no-slip contact solver provides exactly -frc_act on j1,
-    # acting as a rigid weld via friction and preventing j1 from rotating at all.
-    mujoco.mj_forward(model, data)
-    R1 = data.xmat[link4_id].reshape(3, 3)
-    rel_pos = R1.T @ (data.xpos[plant_id] - data.xpos[link4_id])
-    q1_conj = data.xquat[link4_id].copy(); q1_conj[1:] *= -1
-    rel_quat = np.zeros(4)
-    mujoco.mju_mulQuat(rel_quat, q1_conj, data.xquat[plant_id])
-    model.eq_data[weld_id, 3:6]  = rel_pos   # relpose pos  at [3:6]
-    model.eq_data[weld_id, 6:10] = rel_quat  # relpose quat at [6:10]
-    data.eq_active[weld_id] = 1
+    # ── Phase 4b: escape hold — stay above source vial before lateral motion ─
+    # At J3_LIFT=0 the plant body is at ~45 mm (vial rim). Hold here briefly
+    # so the plant fully exits the vial opening before the arm sweeps sideways.
+    _arm(INIT_J1, INIT_J2, J3_LIFT)
+    _step(ESCAPE_STEPS)
 
+    # ── Phase 5: transport ────────────────────────────────────────────────
     # j4 compensates for j1+j2 rotation so gripper orientation stays fixed
     j4_end = -((DEST_J1 - INIT_J1) + (DEST_J2 - INIT_J2))
     for i in range(TRANSPORT_STEPS):
@@ -459,9 +448,6 @@ def run_urdf_test(
               f"arm=({lx*1000:.1f},{ly*1000:.1f})mm")
 
     # ── Phase 6: insert ───────────────────────────────────────────────────
-    # Deactivate weld before insert: j3 is vertical, finger friction doesn't oppose it,
-    # and keeping the weld active would conflict with the dest-vial floor.
-    data.eq_active[weld_id] = 0
     for i in range(INSERT_STEPS):
         _arm(DEST_J1, DEST_J2, J3_LIFT + (i / INSERT_STEPS) * (j3_ins - J3_LIFT), j4_end)
         mujoco.mj_step(model, data)
@@ -511,7 +497,7 @@ def run_urdf_test(
 
     px, py, pz = _ppos()
     dist = math.hypot(px - DEST_X, py - DEST_Y) * 1000
-    success = dist < DEST_XY_TOL * 1000 and pz > -0.030
+    success = dist < DEST_XY_TOL * 1000 and pz > pz_settled - 0.005
 
     return {
         "success":         success,

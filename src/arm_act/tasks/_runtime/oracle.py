@@ -300,6 +300,21 @@ def main(spec: dict[str, Any]) -> int:
                 wp_pos, _ = waypoints[s.phase]
                 reached = _reached(tcp, wp_pos, s.phase, params)
 
+                # Grasp-geometry trace (env-var gated; DBG_GRASP=1). Shows
+                # whether the plant rises WITH the TCP (form-closure caught:
+                # tcp-plant gap stays ~constant) or stays flat while the TCP
+                # climbs (slip: gap grows). Ground truth for tuning the lip.
+                if env_id == 0 and os.environ.get("DBG_GRASP") and (
+                    s.episode_step % 10 == 0
+                ):
+                    print(
+                        f"[GRASP-DBG ep{s.episode_idx} t{s.episode_step}] "
+                        f"phase={s.phase.name} tcp_z={float(tcp[2]):.4f} "
+                        f"plant_z={float(pickable_now[2]):.4f} "
+                        f"gap={float(tcp[2]-pickable_now[2]):.4f}",
+                        flush=True,
+                    )
+
                 # Phase transitions (mirrors serial logic).
                 if s.phase in (Phase.GRASP, Phase.RELEASE):
                     s.hold_counter += 1

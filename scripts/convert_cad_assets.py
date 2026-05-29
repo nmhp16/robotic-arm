@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import tempfile
 
 from isaaclab.app import AppLauncher
@@ -111,29 +112,31 @@ ASSETS = [
         "scale": 0.001,
         "collider": "convex_decomposition",
         "friction": (0.5, 0.4, 0.0),
-        # HOLLOW WELL collision (4 walls) instead of the solid convex-decomp
-        # (which filled the bore and is why collision was disabled). The well
-        # has a ~20mm square bore that holds the plant centred (can't be
-        # knocked far) yet admits the 16mm gripper, and 70mm tall walls. The
-        # plant stands inside; the long tip reaches down past the rim. Visual
-        # stays the round vial mesh. This is the fixture that makes the grasp
-        # repeatable (the real "pick out of a vial" task).
+        # HOLLOW WELL collision (4 walls), ~20mm square bore. SHALLOW WELL
+        # (2026-05-29): walls cut 70mm -> 25mm (origin z 0.035->0.0125, size z
+        # 0.070->0.025 -> rim at world z=0.025). Rationale: the above-rim
+        # form-closure grasp needs the plant to stand PROUD of the rim (grasp in
+        # free space, no bore binding/explosion) AND the lift to clear the rim
+        # to stay under the SCARA ~0.10m reach ceiling. A 70mm well forced a
+        # deep recessed grasp (the geometric-slip trap); a 25mm well lets the
+        # grasp + a stem collar sit above the rim and the lift-out clear in
+        # ~47mm. MEASURE the settled rim + grasp after reconvert (DBG_GRASP).
         "collision_override": (
             '<collision>\n'  # +X wall
-            '      <origin xyz="0.0125 0 0.035" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
+            '      <origin xyz="0.0125 0 0.0125" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.025"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # -X wall
-            '      <origin xyz="-0.0125 0 0.035" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
+            '      <origin xyz="-0.0125 0 0.0125" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.025"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # +Y wall
-            '      <origin xyz="0 0.0125 0.035" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
+            '      <origin xyz="0 0.0125 0.0125" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.025"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # -Y wall
-            '      <origin xyz="0 -0.0125 0.035" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
+            '      <origin xyz="0 -0.0125 0.0125" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.025"/></geometry>\n'
             '    </collision>'
         ),
         "color_rgba": (0.72, 0.82, 0.92, 0.12),   # GLASS: low alpha → transparent, so the recessed stem shows THROUGH the vial walls (real vial is glass). The opaque grey vial was hiding the stem from every camera — likely the core perception fix.
@@ -146,6 +149,21 @@ ASSETS = [
         "scale": 0.001,
         "collider": "convex_decomposition",
         "friction": (6.0, 5.0, 0.0),   # 3->6: a real plant stem isn't slick; higher mu raises the static-friction limit so the grip holds against gravity through the LIFT (the dominant slip failure). Safe now that the V-groove stops lateral ejection.
+        # Compliant CONTACT (2026-05-28): the real fix for LIFT/MOVE slip. A
+        # rigid 6mm cylinder vs rigid jaw is a stiff LINE contact — it stores
+        # penetration energy and POPS (ejecting the stem) the instant the lift
+        # load changes the contact, and the converging V-faces turn the clamp
+        # into an axial squirt. A real stem is slightly squishy: the contact is
+        # a sustained, distributed patch with no pop. compliant_contact_stiffness
+        # makes the normal contact spring-like (δ = F/k), modelling that squish.
+        # (k, damping). ITER: 3e4 was too soft — the round proxy tipped/sank at
+        # REST in the vial (root z dipped < -0.05 by ~t=100 → spurious drops),
+        # AND grasp slip persisted. 3e4 -> 8e4: firmer rest-seating, still ~2.5x
+        # softer than near-rigid so it keeps anti-pop compliance. ~0.31mm give
+        # under a gentle ~25N grip. If rest-drops persist -> raise further; if
+        # slip returns at this stiffness -> the round proxy has no good window
+        # and the form-closure ledge (geometry) is the real fix.
+        "compliant": (80000.0, 800.0),
         # Saturated green so the policy's vision backbone has a strong colour
         # signal to localize the pickable against the grey table/vial/tray.
         # Vivid low-R/B green: the RTX render desaturates green ~5x (bright dome
@@ -202,37 +220,50 @@ ASSETS = [
         # ~1mm precise seating), nodes throughout catch regardless of grasp z.
         # Nodes are COLLISION-ONLY; the leafy VISUAL mesh is unchanged so it
         # still reads as a plant (node swellings hidden in the foliage).
+        # RIBBED STEM form-closure (2026-05-29). The prior 8mm nodes (r=0.004)
+        # were only a 1mm radial step over the 6mm stem — against the angled
+        # V-groove tip that's no hard shelf, so the stem rode through and slip
+        # persisted (compliant-contact runs: LIFT 25-55%). The 66mm-tall flat
+        # jaw blade grips the stem along its whole column, so a single collar
+        # there just gets gripped instead of the stem. Fix: make the column a
+        # RATCHET — 11mm ribs (r=0.0055, a 5.5mm step the gentle 25N jaws can't
+        # slide past) every ~8mm with 6mm valleys, so the jaw always grips a rib
+        # AND any upward slip immediately seats the next rib against the jaw =
+        # hard geometric stop at any grasp height (μ-independent). 11mm OD fits
+        # the ~20mm vial bore (4.5mm clearance/side). Collision-only; visual
+        # mesh unchanged (ribs hidden in foliage). Core smooth cylinder kept so
+        # the V-groove still self-centres laterally.
+        # SMOOTH 6mm grasp stem (2026-05-29, reverted). The fingertip-lip +
+        # extended-stem combo EXPLODED at grasp (closing the jaw ejected the
+        # plant through the floor to z=-1.0 — measured via DBG_GRASP). Reverted
+        # to the clean smooth cylinder (r=0.003 len=0.040 center z=0.058 ->
+        # world 0.023..0.047). This is the known grasps-but-slips baseline
+        # (compliant k=8e4). NEXT (above-rim redesign): make the plant stand
+        # proud of the rim + add a collar in free space above the rim so form
+        # closure can engage without binding/exploding in the 20mm bore.
+        # ABOVE-RIM stem (2026-05-29): extended UPWARD (origin z 0.058->0.078,
+        # len 0.040->0.067 -> world span ~0.005..0.045 via x0.6) so graspable
+        # stem stands ABOVE the new shallow 25mm vial rim, in free space. Grasp
+        # at world ~0.030 (above rim) avoids bore binding/explosion. Extends UP
+        # only (the earlier DOWN extension penetrated the floor and exploded).
         "collision_override": (
             '<collision>\n'
-            '      <origin xyz="0 0 0.058" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.078" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder radius="0.003" length="0.040"/>\n'
+            '        <cylinder radius="0.003" length="0.067"/>\n'
             '      </geometry>\n'
-            '    </collision>\n'
-            '    <collision>\n'
-            '      <origin xyz="0 0 0.050" rpy="0 0 0"/>\n'
-            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
-            '    </collision>\n'
-            '    <collision>\n'
-            '      <origin xyz="0 0 0.062" rpy="0 0 0"/>\n'
-            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
-            '    </collision>\n'
-            '    <collision>\n'
-            '      <origin xyz="0 0 0.074" rpy="0 0 0"/>\n'
-            '      <geometry><cylinder radius="0.004" length="0.005"/></geometry>\n'
-            '    </collision>\n'
-            # Leaf-canopy disk: gives the foliage a thin physical presence so it
-            # can contact the vial walls (stops visual leaves from clipping
-            # through) and so wall friction resists rotation. Radius 4.5 mm
-            # leaves 0.5 mm clearance from the gripper's open-jaw inner face
-            # (gripper-x = ±5 mm), so the disk doesn't block DESCEND. With the
-            # task z-scale 0.5 the disk lands at world z ≈ 0.035 (mid-leaves)
-            # and is 1.5 mm thick — inside the vial bore (r=10 mm) at the
-            # grasp height, then clears the rim during LIFT.
-            '    <collision>\n'
-            '      <origin xyz="0 0 0.070" rpy="0 0 0"/>\n'
-            '      <geometry><cylinder radius="0.0045" length="0.003"/></geometry>\n'
             '    </collision>'
+            # Leaf-canopy disk attempted 2026-05-28, reverted: the Zimmer
+            # V-groove prong is a 40 mm-tall feature that sweeps world
+            # z ≈ 20–60 mm during close. Any disk wide enough (r ≳ 1.5 mm)
+            # to contact the 20 mm vial bore inside that z band collides
+            # with the prong AABB and jams the grasp. Visual-leaves-through-
+            # wall is left as a known sim artifact — the leaves carry no
+            # collision because adding it requires either tearing out the
+            # V-groove or building an annular leaf collider (PhysX has no
+            # torus primitive). Angular damping on the rigid body (set in
+            # the task yaml, wired through `env_cfg.py` _build_object_cfg)
+            # addresses the spin component of the same complaint.
         ),
     },
     {
@@ -289,13 +320,26 @@ DEFAULT_COLLISION_BLOCK = """<collision>
     </collision>"""
 
 
-def _bake_friction_into_usd(usd_path: str, friction: tuple) -> None:
+def _bake_friction_into_usd(
+    usd_path: str, friction: tuple, compliant: tuple | None = None
+) -> None:
     """Open the converted USD and bind a PhysicsMaterial with the given
     static/dynamic/restitution to all collision prims under the asset.
 
     Isaac Lab's UsdFileCfg in this build doesn't accept physics_material
     in the spawner, so we set it once at conversion time. The material
     survives subsequent runtime spawns.
+
+    ``compliant`` = ``(stiffness, damping)`` optionally enables PhysX's
+    *compliant contact* model on the same material (via PhysxMaterialAPI).
+    A rigid line-contact between a hard cylindrical stem proxy and the jaws
+    stores penetration energy and releases it as a pop, and converging V-faces
+    convert the clamp force into an axial ejection — neither of which a real
+    (slightly squishy) stem does. A finite compliant stiffness makes the normal
+    contact spring-like, so the force is sustained/distributed instead of
+    popping, which is the physically faithful model of a soft stem surface and
+    is what stops the LIFT/MOVE slip. ``None`` leaves contacts rigid (default).
+    Higher stiffness ⇒ closer to rigid; lower ⇒ softer.
     """
     from pxr import Sdf, Usd, UsdPhysics, UsdShade  # type: ignore
 
@@ -314,6 +358,14 @@ def _bake_friction_into_usd(usd_path: str, friction: tuple) -> None:
     pm.CreateDynamicFrictionAttr().Set(dynamic)
     pm.CreateRestitutionAttr().Set(restitution)
 
+    if compliant is not None:
+        from pxr import PhysxSchema  # type: ignore
+
+        c_stiff, c_damp = compliant
+        physx_mat = PhysxSchema.PhysxMaterialAPI.Apply(mat_prim.GetPrim())
+        physx_mat.CreateCompliantContactStiffnessAttr().Set(float(c_stiff))
+        physx_mat.CreateCompliantContactDampingAttr().Set(float(c_damp))
+
     # Bind the material to (a) any prim with CollisionAPI applied, plus
     # (b) any "collisions" Xform — which is what UrdfConverter produces
     # for nested mesh collision references. Material binding propagates
@@ -329,7 +381,8 @@ def _bake_friction_into_usd(usd_path: str, friction: tuple) -> None:
         bound += 1
 
     stage.Save()
-    print(f">>>   baked friction (s={static} d={dynamic} r={restitution}) on {bound} collision prim(s)", flush=True)
+    comp = f" compliant(k={compliant[0]},d={compliant[1]})" if compliant is not None else ""
+    print(f">>>   baked friction (s={static} d={dynamic} r={restitution}){comp} on {bound} collision prim(s)", flush=True)
 
 
 def _bake_visual_color_into_usd(usd_path: str, color_rgba: tuple) -> None:
@@ -417,6 +470,7 @@ def convert(
     color_rgba: tuple = (0.5, 0.6, 0.5, 1.0),
     urdf_override: str | None = None,
     z_squash: float = 1.0,
+    compliant: tuple | None = None,
 ) -> None:
     """Wrap one STL in a minimal URDF and convert it to USD under ``assets/<asset_dir_name>/``.
 
@@ -502,7 +556,7 @@ def convert(
         converter = UrdfConverter(cfg)
         print(f">>> {asset_dir_name}: {converter.usd_path}", flush=True)
         if friction is not None:
-            _bake_friction_into_usd(converter.usd_path, friction)
+            _bake_friction_into_usd(converter.usd_path, friction, compliant)
         _bake_visual_color_into_usd(converter.usd_path, color_rgba)
     finally:
         os.unlink(urdf_path)
@@ -511,7 +565,18 @@ def convert(
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s", datefmt="%H:%M:%S")
     print(f">>> CONVERT_CAD_ASSETS START. CAD_OUTPUT={CAD_OUTPUT}", flush=True)
-    for a in ASSETS:
+    # Optional CLI filter: any args restrict conversion to assets whose
+    # asset_dir or stl contains one of the given substrings. No args = all.
+    # Lets us reconvert just one asset (e.g. `... -p convert_cad_assets.py
+    # leaf_plant`) without rebuilding the whole arm/gripper set.
+    only = [s for s in sys.argv[1:] if not s.startswith("-")]
+    assets = [
+        a for a in ASSETS
+        if not only or any(t in a["asset_dir"] or t in a["stl"] for t in only)
+    ]
+    if only:
+        print(f">>> filter={only} -> {[a['asset_dir'] for a in assets]}", flush=True)
+    for a in assets:
         print(
             f">>> {a['stl']} -> {a['asset_dir']}/  "
             f"(mass={a['mass']}, kinematic={a['kinematic']}, collider={a['collider']}, "
@@ -528,6 +593,7 @@ def main() -> None:
                 collider_type=a["collider"],
                 friction=a["friction"],
                 collision_override=a["collision_override"],
+                compliant=a.get("compliant"),
                 color_rgba=a.get("color_rgba", (0.5, 0.6, 0.5, 1.0)),
                 urdf_override=a.get("urdf_text"),
                 z_squash=a.get("z_squash", 1.0),

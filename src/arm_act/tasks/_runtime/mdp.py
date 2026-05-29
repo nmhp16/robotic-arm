@@ -375,9 +375,22 @@ def object_on_target(
     driver_joint: str = "finger_left_joint",
     closed_threshold: float = 0.02,
     height_min: float = -0.05,
+    min_stable_steps: int = 1,
+    min_steps: int = 0,
 ) -> torch.Tensor:
-    """True when the object sits within (xy, height) thresholds of the target
-    AND the gripper is open — i.e., physically placed in the dest container.
+    """True when the object has sat within (xy, height) thresholds of the
+    target AND the gripper has been open for ``min_stable_steps`` *consecutive*
+    env steps — i.e., physically placed and resting in the dest container.
+
+    The consecutive-step debounce (same pattern as ``pickable_lifted``) is what
+    makes this robust to the read-after-reset race: right after an env reset the
+    object's ``root_pos_w`` can lag one cache refresh behind the reset write and
+    momentarily read last episode's near-target pose, which would otherwise fire
+    a false 1-frame "success" at episode start. The next fresh frame reads the
+    object back at its spawn (far from the target), zeroing the streak, so a
+    transient stale frame can never reach ``min_stable_steps``. A real place
+    holds indefinitely. ``min_stable_steps=1`` reproduces the old single-frame
+    behavior (backward-compatible for tasks that don't set it).
     """
     obj: RigidObject = env.scene[object_cfg.name]
     target: RigidObject = env.scene[target_cfg.name]
@@ -397,12 +410,36 @@ def object_on_target(
         gripper_open_check = pos < closed_threshold
         placed = torch.logical_and(placed, gripper_open_check)
 
-    # Diagnostic: print the first 10 firings with the numbers that triggered
-    # it. If an early/wrong fire shows up, the print catches it at the source
-    # — we don't paper over it with a step gate.
+    # Plausibility floor: a real vial->vial place cannot physically complete in
+    # the first ``min_steps`` env steps (hover+descend+grasp-hold+lift+traverse+
+    # place+release >> 100 steps). Empirically the object's root_pos_w SETTLES
+    # over the first ~10-15 frames after an env reset — it reads a near-target
+    # pose that PERSISTS across those frames (not a 1-frame blip), which defeats
+    # the consecutive-step debounce below (the streak builds to min_stable_steps
+    # before the read corrects). Gating on episode step kills those early fires
+    # outright while excluding zero legitimate successes (none finish that fast).
+    if min_steps > 0:
+        placed = torch.logical_and(placed, env.episode_length_buf >= min_steps)
+
+    # Consecutive-step debounce (catches brief flickers; see docstring). Same
+    # counter pattern as pickable_lifted: multiply-then-add gives counter =
+    # instantaneous * (counter + 1), so the streak increments while the
+    # condition holds and zeroes the instant it fails.
+    placed_now = placed
+    attr = "_object_on_target_counter"
+    if not hasattr(env, attr) or getattr(env, attr).shape[0] != env.num_envs:
+        setattr(env, attr, torch.zeros(env.num_envs, dtype=torch.long, device=env.device))
+    counter: torch.Tensor = getattr(env, attr)
+    counter.mul_(placed_now.long())
+    counter.add_(placed_now.long())
+    placed = counter >= min_stable_steps
+
+    # Diagnostic: print the first 10 geometry-firings with the numbers that
+    # triggered them AND the debounce streak, so a stale/early fire is visible
+    # at the source and we can confirm the debounce rejected it (fires=False).
     global _object_on_target_diag_count
-    if _object_on_target_diag_count < 10 and bool(placed.any()):
-        fired = placed.nonzero(as_tuple=False).flatten().tolist()
+    if _object_on_target_diag_count < 10 and bool(placed_now.any()):
+        fired = placed_now.nonzero(as_tuple=False).flatten().tolist()
         for env_id in fired:
             if _object_on_target_diag_count >= 10:
                 break
@@ -413,7 +450,8 @@ def object_on_target(
                 f"env={env_id} step={int(env.episode_length_buf[env_id])} "
                 f"xy_dist={float(xy_dist[env_id]):.4f} "
                 f"z_diff={float(pos_diff[env_id, 2]):.4f} "
-                f"gripper_open={go}",
+                f"gripper_open={go} streak={int(counter[env_id])}/{min_stable_steps} "
+                f"fires={bool(placed[env_id])}",
                 flush=True,
             )
 
@@ -640,6 +678,30 @@ def reward_lift_progress_dense(
     z0 = _pickable_initial_z(env, object_cfg.name)
     frac = torch.clamp((obj.data.root_pos_w[:, 2] - z0) / lift_height, 0.0, 1.0)
     return grasped.to(torch.float32) * frac
+
+
+def pickable_dropped(
+    env: ManagerBasedRLEnv,
+    minimum_height: float = -0.05,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("pickable"),
+    min_steps: int = 0,
+) -> torch.Tensor:
+    """``pickable_dropping`` termination (root z below ``minimum_height``) with a
+    post-reset grace period. The object's ``root_pos_w`` settles over the first
+    frames after an env reset — a stale/transient read (or a transient compliant
+    -contact penetration) can dip z below ``minimum_height`` even though the
+    object is resting in the vial, which fired spurious early terminations
+    (observed: t=7 / t=29 FAILs at PRE_HOVER/HOVER). ``min_steps`` suppresses the
+    drop check for the first N steps; by then the object is untouched in the vial
+    so a real drop is impossible, and any drop AFTER the grace (slip during
+    lift/transport) still terminates correctly. ``min_steps=0`` = unchanged.
+    """
+    dropped = root_height_below_minimum(
+        env, minimum_height=minimum_height, asset_cfg=asset_cfg
+    )
+    if min_steps > 0:
+        dropped = torch.logical_and(dropped, env.episode_length_buf >= min_steps)
+    return dropped
 
 
 def pickable_lifted(

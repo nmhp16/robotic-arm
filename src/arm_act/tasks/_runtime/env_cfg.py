@@ -528,6 +528,8 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
                 mode="reset",
                 params={
                     "asset_cfg": SceneEntityCfg("pickable"),
+                    # Reverted from the diagnostic mu8-10 (proved friction is
+                    # NOT the slip lever — slip persisted at mu9; it's geometric).
                     "static_friction_range": (2.4, 3.6),    # 3.0 ± 20%
                     "dynamic_friction_range": (2.0, 3.0),   # 2.5 ± 20%
                     "restitution_range": (0.0, 0.0),
@@ -679,12 +681,26 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
         "height_threshold": float(success["height_threshold"]),
         "driver_joint": driver_joint,
         "closed_threshold": closed_threshold,
+        # Consecutive-step debounce for the placed-success check. Defaults to 1
+        # (single-frame, legacy behavior) so tasks that don't set it are
+        # unchanged; vial->vial tasks set min_stable_steps>1 to reject brief
+        # flickers.
+        "min_stable_steps": int(success.get("min_stable_steps", 1)),
+        # Episode-step plausibility floor: success can't fire in the first
+        # min_steps steps (kills the read-after-reset settling false positive
+        # that defeats the debounce). 0 = disabled (other tasks unchanged).
+        "min_steps": int(success.get("min_steps", 0)),
     }
 
     # --- Terminations -------------------------------------------------------
     env_cfg.terminations.pickable_dropping.params = {
         "minimum_height": -0.05,
         "asset_cfg": SceneEntityCfg("pickable"),
+        # Same post-reset settling grace as the success term: don't flag a drop
+        # in the first N steps (the object is untouched in the vial then, so an
+        # early "drop" is a read-settling artifact, not real). Real drops during
+        # lift/transport (t > min_steps) still terminate.
+        "min_steps": int(success.get("min_steps", 0)),
     }
 
     # Success termination has two modes (selected via task yaml):
@@ -808,6 +824,10 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
             rb_kwargs["linear_damping"] = float(obj["linear_damping"])
         if obj.get("angular_damping") is not None:
             rb_kwargs["angular_damping"] = float(obj["angular_damping"])
+        if obj.get("solver_position_iterations") is not None:
+            rb_kwargs["solver_position_iteration_count"] = int(obj["solver_position_iterations"])
+        if obj.get("solver_velocity_iterations") is not None:
+            rb_kwargs["solver_velocity_iteration_count"] = int(obj["solver_velocity_iterations"])
         rigid_props = RigidBodyPropertiesCfg(**rb_kwargs)
         # Optional `collision: false` in YAML disables collision for this
         # asset. Useful for kinematic decoration that the policy shouldn't

@@ -191,7 +191,7 @@ class TerminationsCfg:
     pickable/target with the right thresholds."""
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
-    pickable_dropping = DoneTerm(func=mdp.root_height_below_minimum)
+    pickable_dropping = DoneTerm(func=mdp.pickable_dropped)
     success = DoneTerm(func=mdp.object_on_target)
 
 

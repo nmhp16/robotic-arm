@@ -46,8 +46,8 @@ robot:
   # the correct model for a real Zimmer GEP2010IL force-controlled actuator.
   gripper_control: effort
   gripper_open_N: -200.0   # bumped -50 → -200: at RELEASE the gripper open command was too weak to overcome plant friction holding jaws closed. -200 N per finger (400N total) overcomes μ=6 × clamp friction.
-  gripper_close_N: 200.0
-  gripper_closed_threshold: 0.0015            # joint position threshold for "considered closed" — fingers settle at ~0.002 against the 6mm stem under the 200 N close effort, so 0.0015 still registers a real grasp.
+  gripper_close_N: 200.0   # 25 -> 200 (2026-05-29): the DBG_GRASP trace PROVED 25N grips NOTHING — plant_z stayed dead-flat at -0.022 through the whole lift while the TCP climbed to 0.070 (the gripper lifted EMPTY for 600+ steps). The "gentle grip" went below the threshold to clamp the 6mm stem at all, so every prior "reached LIFT/MOVE/PLACE" was pantomime. Restored to 200N to actually clamp; re-measuring with the trace whether plant_z now rises WITH tcp_z (real grip) — and whether 200N "ejects" (the old untested theory) or holds. Tune down from here if it ejects.
+  gripper_closed_threshold: 0.0015            # joint position threshold for "considered closed" — fingers settle at ~0.002 against the 6mm stem under the gentle close effort, so 0.0015 still registers a real grasp.
   gripper_driver_joint: finger_left_joint
   # SCARA Jacobian is SINGULAR at the all-zeros home pose: the first row
   # (X-velocity) is all zero so DLS IK can't generate X motion until a
@@ -117,6 +117,8 @@ objects:
     # transport dynamics aren't distorted.
     angular_damping: 5.0
     linear_damping: 0.2
+    solver_position_iterations: 16
+    solver_velocity_iterations: 4
     spawn:
       x: [0.31, 0.31]
       y: [-0.01, -0.01]
@@ -193,6 +195,21 @@ success:
   # a plant left dangling in the gripper at lift_height doesn't qualify.
   xy_threshold: 0.03
   height_threshold: 0.06
+  # Require the placed condition to hold 5 CONSECUTIVE steps. Rejects the
+  # read-after-reset stale-frame false success (the bogus t=13 export): the
+  # plant's root_pos_w can lag one cache refresh behind the reset write and
+  # read last episode's near-dest pose for a single frame at episode start.
+  # The next fresh frame reads it back at the source, zeroing the streak, so a
+  # transient stale frame never reaches 5. A real place rests in the well and
+  # holds indefinitely. Matches release_hold_steps=5 / lift_stable_steps=5.
+  min_stable_steps: 5
+  # Plausibility floor: ignore "placed" in the first 100 steps. The plant's
+  # root_pos_w settles over the first ~10-15 frames after reset, reading a
+  # near-dest pose that PERSISTS long enough to defeat min_stable_steps (proven:
+  # ep14 fired a false SUCCESS at t=9, streak 5/5). No real vial->vial place
+  # finishes in <100 steps (grasp-hold 18 + traverse + release 5 >> 100), so
+  # this excludes zero legitimate successes.
+  min_steps: 100
 grasp_check:
   type: object_grasped
   object: plant
@@ -250,9 +267,14 @@ oracle:
   # previous 0.080 left only 5mm of headroom, so half the lifts caught the
   # rim during MOVE. Still within the SCARA's [-0.10, 0.10] TCP reach budget.
   # Rigid plant params (root at z=0, plant top z=0.040 with scale 0.5).
-  hover_height: 0.05
-  grasp_z_offset: 0.030          # tuned baseline — deeper than this hits the collision nodes during descent and DESCEND times out.
-  lift_height: 0.095
+  # ABOVE-RIM grasp for the shallow 25mm vial (2026-05-29): grasp the stem in
+  # free space ~5mm ABOVE the new 25mm rim (TCP~0.030 = root -0.022 + 0.052),
+  # not deep in the bore. hover above that; lift to TCP~0.078 (root+0.10) which
+  # raises the plant base ~48mm to clear the 25mm rim, within the ~0.10 reach
+  # ceiling. ITER-1 estimates — verify/retune from the DBG_GRASP trace.
+  hover_height: 0.085
+  grasp_z_offset: 0.052
+  lift_height: 0.10
   place_z_offset: 0.04                        # vial->vial: lower the plant INTO the dest well (TCP to dest.z+0.04 ~ the grasp height) before release. Tune from the oracle smoke.
   max_dxy: 0.04
   max_dz: 0.02
