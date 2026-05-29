@@ -1,0 +1,206 @@
+<mujoco model="zimmer_grip_test">
+  <!--
+    Minimal MuJoCo grip-test scene: Zimmer GEP2010IL V-groove fingers vs. plant stem.
+
+    Geometry is taken directly from the Isaac Lab assets:
+      - Gripper: blade + V-prong geometry from t3_401_zimmer.urdf (finger section)
+      - Plant:   grasp cylinder + 3 jam nodes from convert_cad_assets.py
+                 with the yaml z-scale 0.5 already applied (world-frame dims)
+      - Floor:   flat plane at z=0
+
+    The full SCARA arm is omitted — the gripper_base is kinematically driven by
+    a mocap body (tcp) so the test runs on any machine without Isaac Sim.
+
+    Frame convention: world Z-up.  Gripper extends downward (fingers at z < base).
+    This is the inverse of the URDF tool frame (URDF +Z = tool approach = world -Z),
+    so finger body positions and geom z-offsets are negated relative to the URDF.
+
+    Finger joint convention (unchanged from URDF):
+      joint = 0.000  → fully OPEN  (inner faces 5 mm from centreline, 10 mm gap)
+      joint = 0.002  → stem contact (gap = 6 mm = 2×stem radius r=3 mm, each jaw 2 mm in)
+      joint = 0.005  → jaws touching (no stem)
+      Range limit 0..0.010 prevents overshoot; stem or opposing jaw stops motion first.
+
+    Contact stiffness rationale:
+      Each finger prong passes the stem's equatorial plane at q = 6.25 mm.  Past that
+      point MuJoCo's nearest-distance test puts the contact on the far side and
+      grip is lost.  Keeping q_eq < 6.25 mm for all forces requires k_contact ≥ 22 kN/m.
+      Using solref τ = 0.5 ms → k_eff = m/τ² = 0.008/2.5e-7 = 32 kN/m (margin 1.5×).
+      At dt = 0.2 ms, stability limit = 2√(m/k) = 1.03 ms >> dt ✓ (5× margin).
+  -->
+
+  <compiler angle="radian" balanceinertia="true"/>
+
+  <option gravity="0 0 -9.81" timestep="0.0002" integrator="implicitfast"
+          iterations="100" noslip_iterations="10" tolerance="1e-10">
+    <flag contact="enable"/>
+  </option>
+  <size njmax="500" nconmax="200"/>
+
+  <default>
+    <!-- condim=6: full frictional contact (normal + 2 tangent + torsion + 2 rolling).
+         Required for the V-groove form-closure to generate anti-rotation torque.
+         solref τ=0.5 ms: k_eff=32 kN/m — stiff enough to keep fingers from passing
+         the stem equatorial plane at any force ≤ 200 N.
+         solimp dmax=0.999: near-rigid — allows near-full constraint force. -->
+    <geom condim="6" friction="1.0 0.005 0.0001" solimp="0 0.999 0.0001 0.5 2" solref="0.0005 1"/>
+    <joint armature="0.0001" damping="0.5"/>
+  </default>
+
+  <worldbody>
+
+    <!-- ── Floor ─────────────────────────────────────────────────────────── -->
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.55 0.50 0.40 1"
+          friction="0.5 0.005 0.0001"/>
+
+    <!-- ── Kinematic TCP controller (mocap) ──────────────────────────────── -->
+    <!-- Set data.mocap_pos[0] in Python to move the gripper. -->
+    <body name="tcp" pos="0.31 -0.01 0.300" mocap="true">
+      <geom type="sphere" size="0.004" rgba="1 0.2 0.2 0.6"
+            contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ── Plant (free rigid body) ───────────────────────────────────────── -->
+    <!--
+      Spawns at (0.31, -0.01, 0).  Geometry = Isaac Lab collision proxy with
+      yaml z-scale 0.5 applied:
+        Grasp cylinder  r=3 mm, half-h=10 mm, centre z=0.029 m
+        Jam node 1      r=4 mm, half-h=1.25 mm, centre z=0.025 m
+        Jam node 2      r=4 mm, half-h=1.25 mm, centre z=0.031 m
+        Jam node 3      r=4 mm, half-h=1.25 mm, centre z=0.037 m
+      Nodes are 8 mm dia — wider than the 6 mm stem — so axial slip jams
+      the next node against the (closed) jaws regardless of grasp height.
+    -->
+    <body name="plant" pos="0.31 -0.01 0">
+      <freejoint name="plant_freejoint"/>
+      <inertial pos="0 0 0.025" mass="0.002"
+                diaginertia="8e-8 8e-8 1e-8"/>
+      <!-- Grasp cylinder -->
+      <geom name="stem"  type="cylinder" pos="0 0 0.029" size="0.003 0.010"
+            friction="3.0 0.01 0.001" rgba="0.35 0.60 0.20 1"/>
+      <!-- Jam node 1 -->
+      <geom name="node1" type="cylinder" pos="0 0 0.025" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <!-- Jam node 2 -->
+      <geom name="node2" type="cylinder" pos="0 0 0.031" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <!-- Jam node 3 -->
+      <geom name="node3" type="cylinder" pos="0 0 0.037" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <!-- Leaf canopy (visual only — no collision, matches Isaac Lab) -->
+      <geom type="sphere" pos="0 0 0.040" size="0.011"
+            rgba="0.15 0.70 0.10 0.8" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ── Zimmer GEP2010IL gripper (welded to tcp mocap) ────────────────── -->
+    <!--
+      gripper_base sits at the same position as tcp.  Its local frame is
+      world-aligned (Z-up), so everything that was at URDF local +Z (downward)
+      is at local -Z here.
+
+      Finger blades: 3×5×66 mm box (half-extents 0.0015×0.0025×0.033).
+        Inner face (facing centre) is at local x=0 in each finger frame.
+        At joint=0 (open):  inner face ±5 mm from centre → 10 mm gap.
+        Stem contacts at joint≈0.002 (gap closes to 6 mm = stem diameter).
+
+      V-groove prongs: 3.5×1×40 mm box (half-extents 0.00175×0.0005×0.020).
+        Left  prong 1: +Y, rotated -135° about local Z  (euler "0 0 -2.356")
+        Left  prong 2: -Y, rotated +135° about local Z  (euler "0 0  2.356")
+        Right prong 1: +Y, rotated  -45° about local Z  (euler "0 0 -0.785")
+        Right prong 2: -Y, rotated  +45° about local Z  (euler "0 0  0.785")
+    -->
+    <body name="gripper_base" pos="0.31 -0.01 0.300">
+      <freejoint name="gripper_freejoint"/>
+      <inertial pos="0.004 0 -0.040" mass="0.25"
+                diaginertia="1.5e-4 1.6e-4 6.0e-5"/>
+      <!-- Gripper body housing (visual only) -->
+      <geom type="box" size="0.031 0.0135 0.040" pos="0.004 0 -0.040"
+            rgba="0.20 0.22 0.25 1" contype="0" conaffinity="0"/>
+
+      <!-- ── Left finger ──────────────────────────────────────────────── -->
+      <!-- Joint origin 5 mm left of centre, 80 mm below gripper_base.
+           Joint axis +X → closing moves finger rightward (toward x=0). -->
+      <body name="finger_left" pos="-0.005 0 -0.080">
+        <joint name="finger_left_joint" type="slide" axis="1 0 0"
+               range="0 0.010" damping="2.0" armature="0.0001"/>
+        <inertial pos="-0.0015 0 -0.050" mass="0.008"
+                  diaginertia="1.74e-5 1.73e-5 2.4e-8"/>
+        <!-- Blade shaft: inner face at local x=0 -->
+        <geom name="fl_blade" type="box"
+              pos="-0.0015 0 -0.043" size="0.0015 0.0025 0.033"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <!-- V-groove prong toward +Y -->
+        <geom name="fl_prong_py" type="box"
+              pos="-0.00125 0.00125 -0.070" euler="0 0 -2.356"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <!-- V-groove prong toward -Y -->
+        <geom name="fl_prong_ny" type="box"
+              pos="-0.00125 -0.00125 -0.070" euler="0 0 2.356"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+      </body>
+
+      <!-- ── Right finger (mirror of left) ────────────────────────────── -->
+      <!-- Joint origin 5 mm right of centre, 80 mm below gripper_base.
+           Joint axis -X → closing moves finger leftward (toward x=0). -->
+      <body name="finger_right" pos="0.005 0 -0.080">
+        <joint name="finger_right_joint" type="slide" axis="-1 0 0"
+               range="0 0.010" damping="2.0" armature="0.0001"/>
+        <inertial pos="0.0015 0 -0.050" mass="0.008"
+                  diaginertia="1.74e-5 1.73e-5 2.4e-8"/>
+        <!-- Blade shaft -->
+        <geom name="fr_blade" type="box"
+              pos="0.0015 0 -0.043" size="0.0015 0.0025 0.033"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <!-- V-groove prong toward +Y -->
+        <geom name="fr_prong_py" type="box"
+              pos="0.00125 0.00125 -0.070" euler="0 0 -0.785"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <!-- V-groove prong toward -Y -->
+        <geom name="fr_prong_ny" type="box"
+              pos="0.00125 -0.00125 -0.070" euler="0 0 0.785"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+      </body>
+    </body>
+
+  </worldbody>
+
+  <!-- ── Contact exclusions ───────────────────────────────────────────────── -->
+  <contact>
+    <!-- Fingers don't collide with the gripper body housing -->
+    <exclude body1="finger_left"  body2="gripper_base"/>
+    <exclude body1="finger_right" body2="gripper_base"/>
+    <!-- Fingers don't collide with each other (they stop at stem or joint limit) -->
+    <exclude body1="finger_left"  body2="finger_right"/>
+  </contact>
+
+  <!-- ── Weld gripper to mocap TCP ────────────────────────────────────────── -->
+  <equality>
+    <!-- Near-rigid weld: solimp dmax=0.999999, solref τ=0.2ms (= dt).
+         Keeps gripper_base within ~0.01mm of mocap position even under 200N contacts. -->
+    <weld name="gripper_tcp_weld" body1="tcp" body2="gripper_base"
+          solref="0.0002 1" solimp="0 0.999999 0.000001 0.5 2"/>
+  </equality>
+
+  <!-- ── Finger actuators (position-servo control) ──────────────────────── -->
+  <!--
+    Position servo: ctrl=0.0 → open (fingers at rest), ctrl=0.010 → fully
+    closed target (fingers try to reach joint=0.010 = 10 mm travel).
+    The stem stops actual closure at ~0.002 m (gap = 6 mm = stem diameter).
+    Stall force at contact = kp × (0.010 − 0.002) = kp × 0.008.
+    Default kp=25000 → stall = 200 N (matches Zimmer datasheet max).
+    Script may override model.actuator_gainprm[:,0] to vary effective force.
+    kv=10 N·s/m damps high-speed closure; critical = 2√(k·m)=28 N·s/m so 10
+    is underdamped but implicitfast handles it without oscillation.
+  -->
+  <actuator>
+    <position name="finger_left_act"  joint="finger_left_joint"
+              kp="25000" kv="10" ctrlrange="0 0.010"/>
+    <position name="finger_right_act" joint="finger_right_joint"
+              kp="25000" kv="10" ctrlrange="0 0.010"/>
+  </actuator>
+
+</mujoco>

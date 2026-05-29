@@ -1,0 +1,171 @@
+<mujoco model="zimmer_vial_test">
+  <!--
+    Vial-to-vial pick-and-place: Zimmer V-groove fingers pick plant from
+    source vial (0.31, -0.01), transport, insert, release into dest vial
+    (0.31, 0.14).  Mirrors pick_plant_out_of_vial_zimmer.yaml geometry.
+
+    Vial geometry (from assets/wide_vial/wide_vial.urdf + STL):
+      Outer radius 15.0 mm, inner radius 13.5 mm (wall 1.5 mm)
+      Height (z-scaled 0.000643): 45 mm  →  rim at z = 0.045 m
+    Modelled as 8 thin box walls + visual STL mesh (collision-disabled).
+    Gripper-vial contact excluded: 5.5 mm blade-to-wall clearance at open.
+  -->
+
+  <compiler angle="radian" balanceinertia="true"/>
+
+  <option gravity="0 0 -9.81" timestep="0.0002" integrator="implicitfast"
+          iterations="100" noslip_iterations="10" tolerance="1e-10">
+    <flag contact="enable"/>
+  </option>
+  <size njmax="500" nconmax="500"/>
+
+  <asset>
+    <mesh name="wide_vial" file="../wide_vial/meshes/wide_vial.stl"
+          scale="0.001 0.001 0.000643"/>
+  </asset>
+
+  <default>
+    <geom condim="6" friction="1.0 0.005 0.0001" solimp="0 0.999 0.0001 0.5 2" solref="0.0005 1"/>
+    <joint armature="0.0001" damping="0.5"/>
+  </default>
+
+  <worldbody>
+
+    <!-- ── Floor ─────────────────────────────────────────────────────────── -->
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.55 0.50 0.40 1"
+          friction="0.5 0.005 0.0001"/>
+
+    <!-- ── Kinematic TCP controller (mocap) ──────────────────────────────── -->
+    <body name="tcp" pos="0.31 -0.01 0.300" mocap="true">
+      <geom type="sphere" size="0.004" rgba="1 0.2 0.2 0.6"
+            contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ── Plant (free rigid body, spawns inside source vial) ────────────── -->
+    <body name="plant" pos="0.31 -0.01 0">
+      <freejoint name="plant_freejoint"/>
+      <inertial pos="0 0 0.025" mass="0.002"
+                diaginertia="8e-8 8e-8 1e-8"/>
+      <geom name="stem"  type="cylinder" pos="0 0 0.029" size="0.003 0.010"
+            friction="3.0 0.01 0.001" rgba="0.35 0.60 0.20 1"/>
+      <geom name="node1" type="cylinder" pos="0 0 0.025" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <geom name="node2" type="cylinder" pos="0 0 0.031" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <geom name="node3" type="cylinder" pos="0 0 0.037" size="0.004 0.00125"
+            friction="3.0 0.01 0.001" rgba="0.25 0.50 0.15 1"/>
+      <geom type="sphere" pos="0 0 0.040" size="0.011"
+            rgba="0.15 0.70 0.10 0.8" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- ── Source vial (static) ──────────────────────────────────────────── -->
+    <!--
+      8 box walls at inner_r=13.5mm, wall=1.5mm, h=45mm.
+      Each box: size=(t/2=0.00075, arc=0.0053, h/2=0.0225).
+      Rotated by angle θ so local X points radially outward.
+      Wall centre radius r_c = inner_r + t/2 = 0.01425 m.
+    -->
+    <body name="source_vial" pos="0.31 -0.01 0">
+      <geom type="mesh" mesh="wide_vial" rgba="0.85 0.90 0.95 0.35"
+            contype="0" conaffinity="0"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01425  0        0.0225" euler="0 0 0"      rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01008  0.01008  0.0225" euler="0 0 0.785"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0        0.01425  0.0225" euler="0 0 1.571"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01008  0.01008  0.0225" euler="0 0 2.356"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01425  0        0.0225" euler="0 0 3.142"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01008 -0.01008  0.0225" euler="0 0 -2.356" rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0       -0.01425  0.0225" euler="0 0 -1.571" rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01008 -0.01008  0.0225" euler="0 0 -0.785" rgba="0.5 0.7 0.9 0.06"/>
+    </body>
+
+    <!-- ── Destination vial (static, 150 mm in +Y) ───────────────────────── -->
+    <body name="dest_vial" pos="0.31 0.14 0">
+      <geom type="mesh" mesh="wide_vial" rgba="0.85 0.90 0.95 0.35"
+            contype="0" conaffinity="0"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01425  0        0.0225" euler="0 0 0"      rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01008  0.01008  0.0225" euler="0 0 0.785"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0        0.01425  0.0225" euler="0 0 1.571"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01008  0.01008  0.0225" euler="0 0 2.356"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01425  0        0.0225" euler="0 0 3.142"  rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos="-0.01008 -0.01008  0.0225" euler="0 0 -2.356" rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0       -0.01425  0.0225" euler="0 0 -1.571" rgba="0.5 0.7 0.9 0.06"/>
+      <geom type="box" size="0.00075 0.0053 0.0225" pos=" 0.01008 -0.01008  0.0225" euler="0 0 -0.785" rgba="0.5 0.7 0.9 0.06"/>
+    </body>
+
+    <!-- ── Zimmer GEP2010IL gripper (welded to tcp mocap) ────────────────── -->
+    <body name="gripper_base" pos="0.31 -0.01 0.300">
+      <freejoint name="gripper_freejoint"/>
+      <inertial pos="0.004 0 -0.040" mass="0.25"
+                diaginertia="1.5e-4 1.6e-4 6.0e-5"/>
+      <geom type="box" size="0.031 0.0135 0.040" pos="0.004 0 -0.040"
+            rgba="0.20 0.22 0.25 1" contype="0" conaffinity="0"/>
+
+      <body name="finger_left" pos="-0.005 0 -0.080">
+        <joint name="finger_left_joint" type="slide" axis="1 0 0"
+               range="0 0.010" damping="2.0" armature="0.0001"/>
+        <inertial pos="-0.0015 0 -0.050" mass="0.008"
+                  diaginertia="1.74e-5 1.73e-5 2.4e-8"/>
+        <geom name="fl_blade" type="box"
+              pos="-0.0015 0 -0.043" size="0.0015 0.0025 0.033"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <geom name="fl_prong_py" type="box"
+              pos="-0.00125 0.00125 -0.070" euler="0 0 -2.356"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <geom name="fl_prong_ny" type="box"
+              pos="-0.00125 -0.00125 -0.070" euler="0 0 2.356"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+      </body>
+
+      <body name="finger_right" pos="0.005 0 -0.080">
+        <joint name="finger_right_joint" type="slide" axis="-1 0 0"
+               range="0 0.010" damping="2.0" armature="0.0001"/>
+        <inertial pos="0.0015 0 -0.050" mass="0.008"
+                  diaginertia="1.74e-5 1.73e-5 2.4e-8"/>
+        <geom name="fr_blade" type="box"
+              pos="0.0015 0 -0.043" size="0.0015 0.0025 0.033"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <geom name="fr_prong_py" type="box"
+              pos="0.00125 0.00125 -0.070" euler="0 0 -0.785"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+        <geom name="fr_prong_ny" type="box"
+              pos="0.00125 -0.00125 -0.070" euler="0 0 0.785"
+              size="0.00175 0.0005 0.020"
+              friction="3.0 0.01 0.001" rgba="0.85 0.85 0.88 1"/>
+      </body>
+    </body>
+
+  </worldbody>
+
+  <!-- ── Contact exclusions ───────────────────────────────────────────────── -->
+  <contact>
+    <exclude body1="finger_left"  body2="gripper_base"/>
+    <exclude body1="finger_right" body2="gripper_base"/>
+    <exclude body1="finger_left"  body2="finger_right"/>
+    <!-- Gripper fits inside vial with 5.5 mm clearance; exclude to prevent
+         accidental wall nudges from perturbing the descent trajectory. -->
+    <exclude body1="finger_left"  body2="source_vial"/>
+    <exclude body1="finger_right" body2="source_vial"/>
+    <exclude body1="gripper_base" body2="source_vial"/>
+    <exclude body1="finger_left"  body2="dest_vial"/>
+    <exclude body1="finger_right" body2="dest_vial"/>
+    <exclude body1="gripper_base" body2="dest_vial"/>
+  </contact>
+
+  <!-- ── Weld gripper to mocap TCP ────────────────────────────────────────── -->
+  <equality>
+    <weld name="gripper_tcp_weld" body1="tcp" body2="gripper_base"
+          solref="0.0002 1" solimp="0 0.999999 0.000001 0.5 2"/>
+  </equality>
+
+  <!-- ── Finger actuators ──────────────────────────────────────────────────── -->
+  <actuator>
+    <position name="finger_left_act"  joint="finger_left_joint"
+              kp="25000" kv="10" ctrlrange="0 0.010"/>
+    <position name="finger_right_act" joint="finger_right_joint"
+              kp="25000" kv="10" ctrlrange="0 0.010"/>
+  </actuator>
+
+</mujoco>
