@@ -119,6 +119,20 @@ def _build_xml() -> str:
     walls = _vial_walls()
 
     # Step 3: inject option/size/asset/default after <compiler .../>
+    # Visual mesh assets included here; MuJoCo's URDF loader ignores <visual> mesh
+    # elements and only loads <collision> geometry, so we inject them manually.
+    # gripper_base maps to link_4: all intermediate fixed joints have zero origin.
+    _VIS_MESHES = [
+        ('vis_base',    'base_link.stl'),
+        ('vis_link1',   'link_1.stl'),
+        ('vis_link2',   'link_2.stl'),
+        ('vis_link3',   'link_3.stl'),
+        ('vis_gripper', 'gripper_base.stl'),
+    ]
+    vis_mesh_assets = ''.join(
+        f'\n    <mesh name="{mn}" file="{MESH_DIR}/{sf}" scale="0.001 0.001 0.001"/>'
+        for mn, sf in _VIS_MESHES
+    )
     inject_after_compiler = f"""
   <option gravity="0 0 -9.81" timestep="{DT}" integrator="implicitfast"
           iterations="100" noslip_iterations="10" tolerance="1e-10">
@@ -126,7 +140,7 @@ def _build_xml() -> str:
   </option>
   <size njmax="500" nconmax="500"/>
   <asset>
-    <mesh name="wide_vial" file="{VIAL_STL}" scale="0.001 0.001 0.000643"/>
+    <mesh name="wide_vial" file="{VIAL_STL}" scale="0.001 0.001 0.000643"/>{vis_mesh_assets}
   </asset>
   <default>
     <geom condim="6" friction="3.0 0.01 0.001"
@@ -141,11 +155,44 @@ def _build_xml() -> str:
     # Step 3b: disable collision on the base column (visual geom in worldbody).
     # MuJoCo 3.x filterparent uses weld-group membership, not kinematic adjacency,
     # so world↔link_1 contacts (50mm penetration, ~15 MN force) are NOT auto-excluded.
+    # Also make it invisible — the base_link.stl visual mesh will provide the render.
     mjcf = re.sub(
         r'(<geom\b[^>]*size="0\.05 0\.25"[^>]*>)',
         lambda m: m.group(1).replace('/>', ' contype="0" conaffinity="0"/>'),
         mjcf
     )
+    # Hide collision primitives for arm links that have STL visual meshes.
+    # rgba values are unique per link group in the MJCF saved by mj_saveLastXML:
+    #   "0.7 0.7 0.7 1"   → base column cylinder
+    #   "0.95 0.95 0.95 1" → link_1, link_2 boxes
+    #   "0.2 0.2 0.2 1"   → link_3 shaft, link_4 wrist cylinder
+    # Finger geoms use "0.85 0.85 0.88 1" and are intentionally kept visible.
+    mjcf = mjcf.replace('rgba="0.7 0.7 0.7 1"',   'rgba="0.7 0.7 0.7 0"')
+    mjcf = mjcf.replace('rgba="0.95 0.95 0.95 1"', 'rgba="0.95 0.95 0.95 0"')
+    mjcf = mjcf.replace('rgba="0.2 0.2 0.2 1"',   'rgba="0.2 0.2 0.2 0"')
+
+    # Step 3c: inject visual-only STL mesh geoms into worldbody and each arm body.
+    # contype=0/conaffinity=0 → no physics contact, render only.
+    def _vg(mn, pos, eu, rgba):
+        return (f'<geom type="mesh" mesh="{mn}" pos="{pos}" euler="{eu}" '
+                f'rgba="{rgba}" contype="0" conaffinity="0"/>')
+
+    mjcf = re.sub(
+        r'(<worldbody>)',
+        lambda m: m.group(1) + '\n    ' + _vg('vis_base', '-0.189 0 0.17', '1.5707963 0 0', '0.70 0.70 0.70 1'),
+        mjcf, count=1,
+    )
+    for _bname, _mname, _pos, _euler, _rgba in [
+        ('link_1', 'vis_link1',   '-0.189 0 -0.182',     '1.5707963 0 0',   '0.95 0.95 0.95 1'),
+        ('link_2', 'vis_link2',   '-0.414 0 -0.204',     '1.5707963 0 0',   '0.95 0.95 0.95 1'),
+        ('link_3', 'vis_link3',   '-0.543 0.023 -0.261', '1.5707963 0 0',   '0.20 0.20 0.20 1'),
+        ('link_4', 'vis_gripper', '0 0 0.002',           '-1.5707963 0 0',  '0.20 0.22 0.25 1'),
+    ]:
+        mjcf = re.sub(
+            rf'(<body\s+name="{re.escape(_bname)}"[^>]*>)',
+            lambda m, g=_vg(_mname, _pos, _euler, _rgba): m.group(1) + '\n      ' + g,
+            mjcf, count=1,
+        )
 
     # Step 4: inject floor, plant, vials at the start of <worldbody>
     inject_into_worldbody = f"""
