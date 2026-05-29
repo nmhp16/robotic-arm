@@ -161,18 +161,27 @@ def _build_xml() -> str:
         lambda m: m.group(1).replace('/>', ' contype="0" conaffinity="0"/>'),
         mjcf
     )
-    # Hide collision primitives for arm links that have STL visual meshes.
-    # rgba values are unique per link group in the MJCF saved by mj_saveLastXML:
-    #   "0.7 0.7 0.7 1"   → base column cylinder
-    #   "0.95 0.95 0.95 1" → link_1, link_2 boxes
-    #   "0.2 0.2 0.2 1"   → link_3 shaft, link_4 wrist cylinder
-    # Finger geoms use "0.85 0.85 0.88 1" and are intentionally kept visible.
+    # Hide collision primitives for arm links that have STL visual mesh replacements.
+    # rgba values are unique per group in the MJCF saved by mj_saveLastXML:
+    #   "0.7 0.7 0.7 1"   → base column cylinder   (has base_link.stl replacement)
+    #   "0.95 0.95 0.95 1" → link_1, link_2 boxes   (have link_1/2.stl replacements)
+    # Finger geoms use "0.85 0.85 0.88 1" → intentionally kept visible.
+    # link_3 shaft (size="0.012 0.05") and link_4 wrist (size="0.018 0.02") both use
+    # "0.2 0.2 0.2 1". Hide only link_3 (has link_3.stl); keep link_4 visible (no .stl).
     mjcf = mjcf.replace('rgba="0.7 0.7 0.7 1"',   'rgba="0.7 0.7 0.7 0"')
     mjcf = mjcf.replace('rgba="0.95 0.95 0.95 1"', 'rgba="0.95 0.95 0.95 0"')
-    mjcf = mjcf.replace('rgba="0.2 0.2 0.2 1"',   'rgba="0.2 0.2 0.2 0"')
+    mjcf = re.sub(
+        r'(<geom\b[^>]*size="0\.012 0\.05"[^>]*)rgba="0\.2 0\.2 0\.2 1"',
+        r'\1rgba="0.2 0.2 0.2 0"',
+        mjcf,
+    )
 
     # Step 3c: inject visual-only STL mesh geoms into worldbody and each arm body.
     # contype=0/conaffinity=0 → no physics contact, render only.
+    # vis_gripper offset: gripper_base lives in link_4 body but the URDF routes through
+    # link_4_to_tool0 (xyz=0,0,-0.04  rpy=π,0,0).  Accumulated transform:
+    #   pos  = Rx(π) * (0,0,0.002) + (0,0,-0.04) = (0, 0, -0.042)
+    #   euler = Rx(π)*Rx(-π/2) = Rx(π/2) = (1.5707963, 0, 0)
     def _vg(mn, pos, eu, rgba):
         return (f'<geom type="mesh" mesh="{mn}" pos="{pos}" euler="{eu}" '
                 f'rgba="{rgba}" contype="0" conaffinity="0"/>')
@@ -186,7 +195,7 @@ def _build_xml() -> str:
         ('link_1', 'vis_link1',   '-0.189 0 -0.182',     '1.5707963 0 0',   '0.95 0.95 0.95 1'),
         ('link_2', 'vis_link2',   '-0.414 0 -0.204',     '1.5707963 0 0',   '0.95 0.95 0.95 1'),
         ('link_3', 'vis_link3',   '-0.543 0.023 -0.261', '1.5707963 0 0',   '0.20 0.20 0.20 1'),
-        ('link_4', 'vis_gripper', '0 0 0.002',           '-1.5707963 0 0',  '0.20 0.22 0.25 1'),
+        ('link_4', 'vis_gripper', '0 0 -0.042',          '1.5707963 0 0',   '0.20 0.22 0.25 1'),
     ]:
         mjcf = re.sub(
             rf'(<body\s+name="{re.escape(_bname)}"[^>]*>)',
