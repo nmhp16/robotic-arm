@@ -77,7 +77,7 @@ if [[ -z "${SKIP_USD:-}" ]]; then
         variant=t3_401_simple_gripper
         usd="$REPO_ROOT/assets/$variant/$variant.usd"
         cfg_dir="$REPO_ROOT/assets/$variant/configuration"
-        script="$REPO_ROOT/scripts/convert_$variant.py"
+        script="$REPO_ROOT/scripts/convert/convert_$variant.py"
         if [[ -f "$usd" ]] && [[ -d "$cfg_dir" ]]; then
             log "USD ok: $usd"
         else

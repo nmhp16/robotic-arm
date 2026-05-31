@@ -32,7 +32,7 @@ from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS_Compound, TopoDS_Shape
 from OCP.XCAFDoc import XCAFDoc_DocumentTool
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 STEP_PATH = os.path.join(REPO_ROOT, "assets", "t3_401_simple_gripper", "cad", "epson649561eu.stp")
 MESH_DIR = os.path.join(REPO_ROOT, "assets", "t3_401_simple_gripper", "meshes")
 

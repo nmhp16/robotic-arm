@@ -44,6 +44,26 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--hdf5-path", type=pathlib.Path, default=None)
     p.add_argument(
+        "--no-cameras",
+        action="store_true",
+        help="State-only training: drop all camera obs (state = eef_pos+eef_quat+gripper). "
+        "Use for camera-less demo sets such as the standalone-Newton oracle demos.",
+    )
+    p.add_argument(
+        "--state-keys",
+        nargs="+",
+        default=None,
+        help="obs/* keys to concatenate into the policy state vector (default: "
+        "eef_pos eef_quat gripper_pos).",
+    )
+    p.add_argument(
+        "--object-state",
+        action="store_true",
+        help="Convenience: append pickable_pos + target_pos to the state so a "
+        "camera-less policy can perceive the pick/place locations (deploy-time "
+        "supplied by a detector). Ignored if --state-keys is given.",
+    )
+    p.add_argument(
         "--gripper-classification",
         action="store_true",
         help="Treat the LAST action dim as binary {-1,+1} with a sigmoid+BCE head "
@@ -78,6 +98,13 @@ def main() -> int:
         cfg["training"]["batch_size"] = args.batch_size
     if args.hdf5_path is not None:
         cfg["data"]["hdf5_path"] = str(args.hdf5_path)
+    if args.no_cameras:
+        cfg["data"]["camera_keys"] = []
+    if args.state_keys:
+        cfg["data"]["state_keys"] = list(args.state_keys)
+    elif args.object_state:
+        cfg["data"]["state_keys"] = ["eef_pos", "eef_quat", "gripper_pos",
+                                     "pickable_pos", "target_pos"]
 
     out_dir = pathlib.Path(args.output_dir or cfg["training"]["output_dir"])
 
@@ -86,10 +113,12 @@ def main() -> int:
 
     # --- Data ----------------------------------------------------------------
     data_cfg = cfg["data"]
+    state_keys = tuple(data_cfg.get("state_keys") or HDF5DemoDataset.DEFAULT_STATE_KEYS)
     dataset = HDF5DemoDataset(
         hdf5_path=data_cfg["hdf5_path"],
         camera_keys=tuple(data_cfg["camera_keys"]),
         chunk_size=cfg["policy"]["chunk_size"],
+        state_keys=state_keys,
     )
     loader = DataLoader(
         dataset,
@@ -106,6 +135,7 @@ def main() -> int:
     pol_cfg = cfg["policy"]
     model_cfg = ACTConfig(
         camera_keys=tuple(data_cfg["camera_keys"]),
+        state_keys=state_keys,
         state_dim=dataset.state_dim,
         action_dim=dataset.action_dim,
         chunk_size=pol_cfg["chunk_size"],

@@ -16,9 +16,9 @@
 #
 # One-time USD generation (Isaac Lab needed):
 #   env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p \
-#       scripts/convert_ur5_omnipicker.py
+#       scripts/convert/convert_ur5_omnipicker.py
 #   env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p \
-#       scripts/convert_holder.py
+#       scripts/convert/convert_holder.py
 
 task:
   name: pick_vial_from_holder

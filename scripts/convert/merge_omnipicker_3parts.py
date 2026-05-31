@@ -18,7 +18,7 @@ import numpy as np
 from pxr import Usd, UsdGeom, Gf
 
 USD_PATH = "/tmp/g1_omnipicker/configuration/robot_base.usd"
-OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "assets", "ur5_omnipicker", "meshes")
+OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "ur5_omnipicker", "meshes")
 
 # URDF finger_left/finger_right joint origins in gripper_base frame (from URDF).
 # The merged finger STLs will be expressed in these local frames so the prismatic

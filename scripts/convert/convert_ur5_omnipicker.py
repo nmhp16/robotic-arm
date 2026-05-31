@@ -23,7 +23,7 @@ from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E40
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 URDF_PATH = os.path.join(REPO_ROOT, "assets", "ur5_omnipicker", "ur5_omnipicker.urdf")
 USD_DIR = os.path.join(REPO_ROOT, "assets", "ur5_omnipicker")
 USD_NAME = "ur5_omnipicker.usd"

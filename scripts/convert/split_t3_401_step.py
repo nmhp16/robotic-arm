@@ -39,7 +39,7 @@ from pathlib import Path
 
 logger = logging.getLogger("t3_step")
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CAD_DIR = REPO_ROOT / "assets" / "t3_401_simple_gripper" / "cad"
 DEFAULT_STEP = CAD_DIR / "T3-B401S.stp"
 INVENTORY_JSON = CAD_DIR / "inventory.json"

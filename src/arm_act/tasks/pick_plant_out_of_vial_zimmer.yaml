@@ -119,6 +119,12 @@ objects:
     linear_damping: 0.2
     solver_position_iterations: 16
     solver_velocity_iterations: 4
+    # TORSIONAL FRICTION (2026-05-29): PhysX equivalent of MuJoCo condim=6 — the
+    # ONE setting we never had on (default 0 = off). It applies rotational
+    # friction over a contact patch of this radius, resisting the round stem
+    # twisting/rolling out of the V-jaws during lift — the measured slip mode.
+    # 5mm ~ the stem radius; tune up if it still slips, down if grip jams.
+    torsional_patch_radius: 0.005
     spawn:
       x: [0.31, 0.31]
       y: [-0.01, -0.01]
@@ -267,14 +273,11 @@ oracle:
   # previous 0.080 left only 5mm of headroom, so half the lifts caught the
   # rim during MOVE. Still within the SCARA's [-0.10, 0.10] TCP reach budget.
   # Rigid plant params (root at z=0, plant top z=0.040 with scale 0.5).
-  # ABOVE-RIM grasp for the shallow 25mm vial (2026-05-29): grasp the stem in
-  # free space ~5mm ABOVE the new 25mm rim (TCP~0.030 = root -0.022 + 0.052),
-  # not deep in the bore. hover above that; lift to TCP~0.078 (root+0.10) which
-  # raises the plant base ~48mm to clear the 25mm rim, within the ~0.10 reach
-  # ceiling. ITER-1 estimates — verify/retune from the DBG_GRASP trace.
-  hover_height: 0.085
-  grasp_z_offset: 0.052
-  lift_height: 0.10
+  # Reverted to the known-gripping deep-grasp config to isolate the TORSIONAL
+  # FRICTION test (the above-rim grasp is parked — it didn't engage the stem).
+  hover_height: 0.05
+  grasp_z_offset: 0.030
+  lift_height: 0.095
   place_z_offset: 0.04                        # vial->vial: lower the plant INTO the dest well (TCP to dest.z+0.04 ~ the grasp height) before release. Tune from the oracle smoke.
   max_dxy: 0.04
   max_dz: 0.02

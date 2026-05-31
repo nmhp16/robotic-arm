@@ -21,7 +21,7 @@ from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sensors.frame_transformer.frame_transformer_cfg import FrameTransformerCfg
 from isaaclab.sim.spawners.from_files.from_files_cfg import GroundPlaneCfg, UsdFileCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from . import mdp
@@ -257,3 +257,31 @@ class PickPlaceEnvCfgBase(ManagerBasedRLEnvCfg):
         self.episode_length_s = 20.0
         self.sim.dt = 0.01  # 100 Hz
         self.sim.render_interval = 5
+
+        # Newton (MuJoCo-Warp convex solver) backend — opt-in via ARM_ACT_NEWTON=1.
+        # PhysX stays the default so the IL-2.3.2 install is unaffected (NewtonCfg
+        # only exists in IL-3.0). Solver knobs mirror the standalone scripts that
+        # held the round-stem friction grasp 100% (newton_urdf_test.py): elliptic
+        # cone + implicitfast + impratio 10; ccd bumped for the multi-finger gripper.
+        import os
+
+        if os.environ.get("ARM_ACT_NEWTON"):
+            from isaaclab_newton.physics import MJWarpSolverCfg, NewtonCfg
+
+            self.sim.physics = NewtonCfg(
+                solver_cfg=MJWarpSolverCfg(
+                    integrator="implicitfast",
+                    cone="elliptic",
+                    iterations=100,
+                    ls_iterations=50,
+                    impratio=10.0,
+                    ccd_iterations=50,
+                    # Contact/constraint buffer sizes. Defaults overflowed ("increase
+                    # nconmax to ~84") with the gripper + plant + vials + ground, which
+                    # SILENTLY DROPS contacts — including finger<->stem, breaking the grasp.
+                    nconmax=512,
+                    njmax=512,
+                ),
+                num_substeps=1,
+                debug_mode=False,
+            )

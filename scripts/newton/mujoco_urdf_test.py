@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse, math, pathlib, re, sys
 import numpy as np
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 URDF_PATH = REPO_ROOT / "assets" / "t3_401_zimmer" / "t3_401_zimmer.urdf"
 MESH_DIR  = REPO_ROOT / "assets" / "t3_401_zimmer" / "meshes"
 VIAL_STL  = REPO_ROOT / "assets" / "wide_vial" / "meshes" / "wide_vial.stl"

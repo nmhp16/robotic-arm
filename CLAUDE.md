@@ -60,7 +60,7 @@ sim-to-real; "the pipeline runs end-to-end" is necessary but not sufficient.
 
 13. **STEP part-name conventions vary between CAD assemblies.** Inspect
     discovered parts after swapping the STEP file; update the `PART_TO_LINK`
-    map in `scripts/convert_step_to_meshes.py`.
+    map in `scripts/convert/convert_step_to_meshes.py`.
 
 14. **Always inspect per-axis bounds AND centerlines after a mesh swap.**
 
@@ -96,8 +96,8 @@ sim-to-real; "the pipeline runs end-to-end" is necessary but not sufficient.
     variants share arm meshes; re-run every converter:
 
     ```bash
-    env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p scripts/convert_t3_401_tweezer.py
-    env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p scripts/convert_t3_401_simple_gripper.py
+    env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p scripts/convert/convert_t3_401_tweezer.py
+    env -u VIRTUAL_ENV -u CONDA_PREFIX ~/IsaacLab/isaaclab.sh -p scripts/convert/convert_t3_401_simple_gripper.py
     ```
 
     Unset the host venv (`env -u VIRTUAL_ENV -u CONDA_PREFIX`) or Isaac Sim's

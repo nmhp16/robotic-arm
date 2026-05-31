@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from isaaclab.envs.mimic_env_cfg import MimicEnvCfg, SubTaskConfig
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 
 def build_mimic_env_cfg(env_cfg_cls: type, spec: dict[str, Any], class_name: str) -> type:

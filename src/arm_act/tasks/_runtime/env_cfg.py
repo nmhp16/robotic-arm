@@ -36,7 +36,7 @@ from isaaclab.sim.schemas.schemas_cfg import CollisionPropertiesCfg, RigidBodyPr
 from isaaclab.sim.spawners.from_files.from_files_cfg import UsdFileCfg
 from isaaclab.sim.spawners.materials.visual_materials_cfg import PreviewSurfaceCfg
 from isaaclab.sim.spawners.shapes.shapes_cfg import CuboidCfg
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab_tasks.manager_based.manipulation.stack.mdp import franka_stack_events
 
@@ -747,7 +747,10 @@ def _apply_spec(env_cfg: PickPlaceEnvCfgBase, spec: dict[str, Any]) -> None:
     # this, GPU-PhysX can produce noticeably non-deterministic contact-rich
     # trajectories — recording-vs-replay of oracle demos diverges enough to
     # drop a 2 cm cuboid out of a parallel-jaw grip mid-trajectory.
-    env_cfg.sim.physx.enable_external_forces_every_iteration = True
+    # PhysX-only knob: IL-3.0 renamed SimulationCfg.physx -> .physics and the
+    # Newton (MuJoCo-Warp) backend has no such field, so guard on its presence.
+    if hasattr(env_cfg.sim, "physx"):
+        env_cfg.sim.physx.enable_external_forces_every_iteration = True
     env_cfg.teleop_devices = DevicesCfg(
         devices={
             "keyboard": Se3KeyboardCfg(
@@ -837,6 +840,16 @@ def _build_object_cfg(name: str, obj: dict, prim_suffix: str) -> RigidObjectCfg:
         collision_props = None
         if obj.get("collision", True) is False:
             collision_props = CollisionPropertiesCfg(collision_enabled=False)
+        elif obj.get("torsional_patch_radius") is not None:
+            # TORSIONAL FRICTION (2026-05-29): PhysX's equivalent of MuJoCo
+            # condim=6. Defaults to 0 (OFF) — which is why a round stem rolled
+            # out of the V-jaws all session while MuJoCo (torsional ON) held it.
+            # Radius of the contact patch over which rotational friction acts;
+            # enables resistance to the cylinder twisting/rolling out under lift.
+            collision_props = CollisionPropertiesCfg(
+                collision_enabled=True,
+                torsional_patch_radius=float(obj["torsional_patch_radius"]),
+            )
         # usd_path may be either a Nucleus-relative path (Props/Blocks/...) or
         # a project-relative path. ``local:`` prefix marks a repo-relative path.
         raw = str(obj["usd_path"])

@@ -42,6 +42,9 @@ class ACTConfig:
     """All policy hyperparameters. Mirrors the `policy:` section of defaults.yaml."""
 
     camera_keys: tuple[str, ...] = ("table_cam", "wrist_cam")
+    # obs/* keys concatenated into the state vector (recorded so inference rebuilds
+    # the same vector). Empty/default -> proprio-only eef_pos+eef_quat+gripper_pos.
+    state_keys: tuple[str, ...] = ("eef_pos", "eef_quat", "gripper_pos")
     state_dim: int = 8
     action_dim: int = 7
     chunk_size: int = 50
@@ -191,11 +194,17 @@ class ACTModel(nn.Module):
     def forward(self, images: dict[str, torch.Tensor], state: torch.Tensor) -> torch.Tensor:
         """Return (B, chunk_size, action_dim) action prediction."""
         B = state.shape[0]
-        img_tokens = self._encode_images(images)  # (B, n_cams * 49, hidden)
 
         state_token = self.state_proj(state).unsqueeze(1)  # (B, 1, hidden)
         state_token = state_token + self.state_pos_embed
-        memory_in = torch.cat([img_tokens, state_token], dim=1)  # (B, n_cams*49 + 1, hidden)
+        if self.camera_keys:
+            img_tokens = self._encode_images(images)  # (B, n_cams * 49, hidden)
+            memory_in = torch.cat([img_tokens, state_token], dim=1)  # (B, n_cams*49 + 1, hidden)
+        else:
+            # State-only mode (no cameras, e.g. Newton state demos): the encoder
+            # sees just the proprio token. A valid degenerate ACT — chunk
+            # prediction conditioned on state alone.
+            memory_in = state_token
 
         memory = self.encoder(memory_in)
         queries = self.action_queries.weight.unsqueeze(0).expand(B, -1, -1)  # (B, chunk, hidden)
@@ -307,6 +316,7 @@ def save_policy(
     torch.save(model.state_dict(), out_dir / "model.pt")
     cfg_dict = asdict(model.cfg)
     cfg_dict["camera_keys"] = list(cfg_dict["camera_keys"])
+    cfg_dict["state_keys"] = list(cfg_dict["state_keys"])
     with open(out_dir / "config.json", "w") as f:
         json.dump(cfg_dict, f, indent=2)
     with open(out_dir / "norm_stats.json", "w") as f:
@@ -322,6 +332,8 @@ def load_policy(ckpt_dir: pathlib.Path, device: str = "cuda") -> ACTPolicy:
     with open(ckpt_dir / "config.json") as f:
         cfg_dict = json.load(f)
     cfg_dict["camera_keys"] = tuple(cfg_dict["camera_keys"])
+    if "state_keys" in cfg_dict:
+        cfg_dict["state_keys"] = tuple(cfg_dict["state_keys"])
     cfg = ACTConfig(**cfg_dict)
     model = ACTModel(cfg)
     state = torch.load(ckpt_dir / "model.pt", map_location="cpu", weights_only=True)

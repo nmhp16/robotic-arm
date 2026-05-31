@@ -253,7 +253,7 @@ def main() -> int:
                 obs, _, terminated, truncated, info = env.step(action_t)
 
                 # TODO(nmhp16): remove _emit_eval_trace + this gate once
-                # put_plant_back BC reaches >50% — scripts/diagnose_policy.py
+                # put_plant_back BC reaches >50% — scripts/rl/diagnose_policy.py
                 # is the standalone equivalent.
                 if os.environ.get("ARM_ACT_TRACE_EVAL") and ep == 0:
                     _emit_eval_trace(env, cfg, action, t)

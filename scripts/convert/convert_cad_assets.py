@@ -26,7 +26,7 @@ from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E40
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CAD_OUTPUT = os.path.expanduser("~/test/cad/output")
 
 # COMPLIANCE-ABOVE-GRASP plant URDF (2026-05-25). A first attempt put the
@@ -112,31 +112,25 @@ ASSETS = [
         "scale": 0.001,
         "collider": "convex_decomposition",
         "friction": (0.5, 0.4, 0.0),
-        # HOLLOW WELL collision (4 walls), ~20mm square bore. SHALLOW WELL
-        # (2026-05-29): walls cut 70mm -> 25mm (origin z 0.035->0.0125, size z
-        # 0.070->0.025 -> rim at world z=0.025). Rationale: the above-rim
-        # form-closure grasp needs the plant to stand PROUD of the rim (grasp in
-        # free space, no bore binding/explosion) AND the lift to clear the rim
-        # to stay under the SCARA ~0.10m reach ceiling. A 70mm well forced a
-        # deep recessed grasp (the geometric-slip trap); a 25mm well lets the
-        # grasp + a stem collar sit above the rim and the lift-out clear in
-        # ~47mm. MEASURE the settled rim + grasp after reconvert (DBG_GRASP).
+        # HOLLOW WELL collision (4 walls), ~20mm square bore, 70mm tall (reverted
+        # from the 25mm above-rim experiment — back to the honest200 config that
+        # gripped, so the torsional-friction test changes only ONE variable).
         "collision_override": (
             '<collision>\n'  # +X wall
-            '      <origin xyz="0.0125 0 0.0125" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.005 0.030 0.025"/></geometry>\n'
+            '      <origin xyz="0.0125 0 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # -X wall
-            '      <origin xyz="-0.0125 0 0.0125" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.005 0.030 0.025"/></geometry>\n'
+            '      <origin xyz="-0.0125 0 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.005 0.030 0.070"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # +Y wall
-            '      <origin xyz="0 0.0125 0.0125" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.020 0.005 0.025"/></geometry>\n'
+            '      <origin xyz="0 0.0125 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
             '    </collision>\n'
             '    <collision>\n'  # -Y wall
-            '      <origin xyz="0 -0.0125 0.0125" rpy="0 0 0"/>\n'
-            '      <geometry><box size="0.020 0.005 0.025"/></geometry>\n'
+            '      <origin xyz="0 -0.0125 0.035" rpy="0 0 0"/>\n'
+            '      <geometry><box size="0.020 0.005 0.070"/></geometry>\n'
             '    </collision>'
         ),
         "color_rgba": (0.72, 0.82, 0.92, 0.12),   # GLASS: low alpha → transparent, so the recessed stem shows THROUGH the vial walls (real vial is glass). The opaque grey vial was hiding the stem from every camera — likely the core perception fix.
@@ -241,16 +235,17 @@ ASSETS = [
         # (compliant k=8e4). NEXT (above-rim redesign): make the plant stand
         # proud of the rim + add a collar in free space above the rim so form
         # closure can engage without binding/exploding in the 20mm bore.
-        # ABOVE-RIM stem (2026-05-29): extended UPWARD (origin z 0.058->0.078,
-        # len 0.040->0.067 -> world span ~0.005..0.045 via x0.6) so graspable
-        # stem stands ABOVE the new shallow 25mm vial rim, in free space. Grasp
-        # at world ~0.030 (above rim) avoids bore binding/explosion. Extends UP
-        # only (the earlier DOWN extension penetrated the floor and exploded).
+        # Smooth 6mm grasp stem (reverted to the known-gripping deep config to
+        # isolate the TORSIONAL-FRICTION test). origin z=0.058 len=0.040 ->
+        # world ~0.001..0.025 (x0.6). The above-rim extension is parked; the
+        # torsional-friction fix (env_cfg torsional_patch_radius, the MuJoCo
+        # condim=6 equivalent) targets the SLIP directly, so test it on the
+        # config that already grips@200N.
         "collision_override": (
             '<collision>\n'
-            '      <origin xyz="0 0 0.078" rpy="0 0 0"/>\n'
+            '      <origin xyz="0 0 0.058" rpy="0 0 0"/>\n'
             '      <geometry>\n'
-            '        <cylinder radius="0.003" length="0.067"/>\n'
+            '        <cylinder radius="0.003" length="0.040"/>\n'
             '      </geometry>\n'
             '    </collision>'
             # Leaf-canopy disk attempted 2026-05-28, reverted: the Zimmer

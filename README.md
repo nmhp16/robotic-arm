@@ -356,7 +356,7 @@ Smoke-test the env (any task) before launching a real PPO run:
 
 ```bash
 env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
-    "$ISAACLAB/isaaclab.sh" -p scripts/smoke_rl_env.py \
+    "$ISAACLAB/isaaclab.sh" -p scripts/rl/smoke_rl_env.py \
     --task <task_name> --num-envs 4 --steps 10
 ```
 
@@ -366,7 +366,7 @@ Isaac Lab's bundled trainer:
 
 ```bash
 env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
-    "$ISAACLAB/isaaclab.sh" -p scripts/train_ppo_full.py \
+    "$ISAACLAB/isaaclab.sh" -p scripts/rl/train_ppo_full.py \
     --task Isaac-<Task>-T3-IK-Rel-RL-v0 \
     --num_envs 1024 --headless --enable_cameras
 ```
@@ -388,7 +388,7 @@ land under `eval/runs/<timestamp>/` regardless of policy class:
 
 ```bash
 env -u VIRTUAL_ENV -u CONDA_PREFIX PYTHONPATH=src \
-    "$ISAACLAB/isaaclab.sh" -p scripts/eval_ppo_full.py \
+    "$ISAACLAB/isaaclab.sh" -p scripts/rl/eval_ppo_full.py \
     --task Isaac-<Task>-T3-IK-Rel-RL-v0 \
     --num_envs 32 --num_episodes 50 --headless --video \
     --checkpoint checkpoints/arm_act_rl/<run>/model_199.pt

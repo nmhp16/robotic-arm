@@ -1,9 +1,25 @@
 # Scripts
 
-One-line shell wrappers around the Python entry points. Each script
-selects the right Python environment (Isaac Lab's bundled python for sim
-work, the local training venv for ACT training) and forwards every flag
-through to the underlying module.
+The top level holds the **shell wrappers** — the supported entry points.
+Each selects the right Python environment (Isaac Lab's bundled python for
+sim work, the local training venv for ACT training) and forwards every
+flag to the underlying module. Standalone Python helpers are grouped into
+subdirectories by purpose.
+
+## Directory layout
+
+| Dir          | What's in it                                                              |
+|--------------|---------------------------------------------------------------------------|
+| `*.sh` (top) | Supported pipeline wrappers (see table below) + `setup.sh`.               |
+| `convert/`   | URDF/STEP → USD/mesh converters, STEP splitters, mesh merges.             |
+| `render/`    | Standalone matplotlib design-preview renders (plant/vial/gripper geometry).|
+| `newton/`    | Standalone Newton (MuJoCo-Warp) grasp tests + MJCF/IK library.            |
+| `rl/`        | PPO + green-plant-detector training/eval entry points (`cli_args.py` shared).|
+| `debug/`     | One-off inspectors, camera dumps, demo replay, dataset utilities.         |
+| `archive/`   | Superseded one-offs kept for reference (e.g. `newton-debug/` probe trail).|
+
+Helpers that compute repo-relative paths from `__file__` account for their
+subdirectory depth; run them from the repo root as `scripts/<dir>/<name>.py`.
 
 | Script                 | Environment | Wraps                          | Purpose                                      |
 |------------------------|-------------|--------------------------------|----------------------------------------------|

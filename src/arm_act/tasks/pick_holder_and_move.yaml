@@ -13,7 +13,7 @@
 #   ./scripts/train.sh    --task pick_holder_and_move
 #
 # One-time USD conversion (Isaac Lab needed):
-#   ~/IsaacLab/_isaac_sim/python.sh scripts/convert_holder_pickable.py
+#   ~/IsaacLab/_isaac_sim/python.sh scripts/convert/convert_holder_pickable.py
 #   (in addition to the convert_ur5_omnipicker / convert_holder you ran
 #    for the vial-pick task)
 

@@ -22,7 +22,7 @@ from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E40
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 URDF_PATH = os.path.join(REPO_ROOT, "assets", "holder", "holder.urdf")
 USD_DIR = os.path.join(REPO_ROOT, "assets", "holder")
 USD_NAME = "holder.usd"

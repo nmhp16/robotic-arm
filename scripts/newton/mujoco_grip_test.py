@@ -32,7 +32,7 @@ import argparse
 import pathlib
 import sys
 
-REPO_ROOT      = pathlib.Path(__file__).resolve().parent.parent
+REPO_ROOT      = pathlib.Path(__file__).resolve().parent.parent.parent
 SCENE_XML      = REPO_ROOT / "assets" / "mujoco_grip_test" / "scene.xml"
 SCENE_VIAL_XML = REPO_ROOT / "assets" / "mujoco_grip_test" / "scene_vial.xml"
 MEDIA_DIR      = REPO_ROOT / "media"

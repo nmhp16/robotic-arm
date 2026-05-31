@@ -50,7 +50,7 @@ from pathlib import Path
 import numpy as np
 import trimesh
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parent.parent.parent
 MESH_DIR = REPO / "assets" / "ur5_omnipicker" / "meshes"
 
 # +90° about +X: maps (x, y, z) -> (x, -z, y).  Brings the housing into

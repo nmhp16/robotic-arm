@@ -14,7 +14,7 @@ from __future__ import annotations
 from isaaclab.envs.mdp.actions.actions_cfg import BinaryJointActionCfg
 from isaaclab.envs.mdp.actions.binary_joint_actions import BinaryJointAction
 from isaaclab.managers.action_manager import ActionTerm
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 
 class BinaryJointEffortAction(BinaryJointAction):

@@ -20,7 +20,7 @@ more learning epochs."""
 
 from __future__ import annotations
 
-from isaaclab.utils import configclass
+from isaaclab.utils.configclass import configclass
 
 from isaaclab_rl.rsl_rl import (
     RslRlCNNModelCfg,

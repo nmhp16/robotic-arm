@@ -34,7 +34,7 @@ from isaaclab.sim.converters import UrdfConverter, UrdfConverterCfg  # noqa: E40
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 ASSET_DIR = os.path.join(REPO_ROOT, "assets", "leaf_plant_segmented")
 URDF_PATH = os.path.join(ASSET_DIR, "leaf_plant_segmented.urdf")
 USD_NAME = "leaf_plant_segmented.usd"

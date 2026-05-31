@@ -58,15 +58,25 @@ class NormStats:
 class HDF5DemoDataset(Dataset):
     """Action-chunked windows from an Isaac Lab Mimic HDF5 demo file."""
 
+    # Default proprio-only state (8D): eef_pos(3) + eef_quat(4) + gripper(1).
+    DEFAULT_STATE_KEYS = ("eef_pos", "eef_quat", "gripper_pos")
+
     def __init__(
         self,
         hdf5_path: str | pathlib.Path,
         camera_keys: tuple[str, ...] = ("table_cam", "wrist_cam"),
         chunk_size: int = 50,
+        state_keys: tuple[str, ...] | None = None,
     ) -> None:
         self.hdf5_path = str(hdf5_path)
         self.camera_keys = tuple(camera_keys)
         self.chunk_size = int(chunk_size)
+        # Which obs/* arrays concatenate into the policy state vector. Defaults to
+        # proprio-only (8D) for the camera ACT; a state-only (camera-less) policy
+        # should add object state (e.g. pickable_pos, target_pos) so it can perceive
+        # the pick location — at deploy time supplied by a detector (see memory
+        # detector->state-policy). Each key's obs array must be (T, d).
+        self.state_keys = tuple(state_keys) if state_keys else self.DEFAULT_STATE_KEYS
         self._h5: h5py.File | None = None  # opened lazily per DataLoader worker
 
         # Build the (demo_id, t) index and gather stats by scanning once.
@@ -95,10 +105,9 @@ class HDF5DemoDataset(Dataset):
                     skipped += 1
                     continue
                 obs = d["obs"]
-                eef_pos = np.asarray(obs["eef_pos"], dtype=np.float32)
-                eef_quat = np.asarray(obs["eef_quat"], dtype=np.float32)
-                grip = np.asarray(obs["gripper_pos"], dtype=np.float32).reshape(actions.shape[0], -1)[:, :1]
-                state = np.concatenate([eef_pos, eef_quat, grip], axis=1)
+                parts = [np.asarray(obs[k], dtype=np.float32).reshape(actions.shape[0], -1)
+                         for k in self.state_keys]
+                state = np.concatenate(parts, axis=1)
 
                 actions_all.append(actions)
                 states_all.append(state)
@@ -165,11 +174,11 @@ class HDF5DemoDataset(Dataset):
             img = np.asarray(obs[cam][t], dtype=np.uint8)  # (H, W, 3)
             images[cam] = torch.from_numpy(img).permute(2, 0, 1).contiguous()
 
-        # State at time t.
-        eef_pos = np.asarray(obs["eef_pos"][t], dtype=np.float32).reshape(-1)
-        eef_quat = np.asarray(obs["eef_quat"][t], dtype=np.float32).reshape(-1)
-        grip = np.asarray(obs["gripper_pos"][t], dtype=np.float32).reshape(-1)[:1]
-        state = np.concatenate([eef_pos, eef_quat, grip], axis=0)
+        # State at time t (concatenation of the configured obs keys).
+        state = np.concatenate(
+            [np.asarray(obs[k][t], dtype=np.float32).reshape(-1) for k in self.state_keys],
+            axis=0,
+        )
 
         # Action chunk [t, t+chunk_size). Pad past episode end with last action.
         end = min(t + self.chunk_size, ep_len)
