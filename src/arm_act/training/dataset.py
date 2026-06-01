@@ -67,10 +67,16 @@ class HDF5DemoDataset(Dataset):
         camera_keys: tuple[str, ...] = ("table_cam", "wrist_cam"),
         chunk_size: int = 50,
         state_keys: tuple[str, ...] | None = None,
+        holdout_last: int = 0,
     ) -> None:
         self.hdf5_path = str(hdf5_path)
         self.camera_keys = tuple(camera_keys)
         self.chunk_size = int(chunk_size)
+        # Reserve the last N demos (by id order) as a held-out eval set — they are
+        # excluded from the index AND the norm stats. self.heldout_ids records them
+        # so an offline eval can target exactly the unseen demos.
+        self.holdout_last = int(holdout_last)
+        self.heldout_ids: list[str] = []
         # Which obs/* arrays concatenate into the policy state vector. Defaults to
         # proprio-only (8D) for the camera ACT; a state-only (camera-less) policy
         # should add object state (e.g. pickable_pos, target_pos) so it can perceive
@@ -89,6 +95,9 @@ class HDF5DemoDataset(Dataset):
                 f["data"].keys(),
                 key=lambda k: int(k.split("_")[-1]) if "_" in k else 0,
             )
+            if self.holdout_last > 0:
+                self.heldout_ids = demo_ids[-self.holdout_last:]
+                demo_ids = demo_ids[: -self.holdout_last]
             skipped = 0
             kept_ids: list[str] = []
             for did in demo_ids:

@@ -43,6 +43,14 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--max-steps", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--hdf5-path", type=pathlib.Path, default=None)
+    p.add_argument("--holdout-demos", type=int, default=0,
+                   help="reserve the last N demos (by id) as a held-out eval set; "
+                   "excluded from training + norm stats")
+    p.add_argument(
+        "--camera-keys", nargs="+", default=None,
+        help="override which camera obs the policy consumes (e.g. wrist_cam). "
+        "Default: the task config's cameras.",
+    )
     p.add_argument(
         "--no-cameras",
         action="store_true",
@@ -100,6 +108,8 @@ def main() -> int:
         cfg["data"]["hdf5_path"] = str(args.hdf5_path)
     if args.no_cameras:
         cfg["data"]["camera_keys"] = []
+    elif args.camera_keys:
+        cfg["data"]["camera_keys"] = list(args.camera_keys)
     if args.state_keys:
         cfg["data"]["state_keys"] = list(args.state_keys)
     elif args.object_state:
@@ -119,7 +129,11 @@ def main() -> int:
         camera_keys=tuple(data_cfg["camera_keys"]),
         chunk_size=cfg["policy"]["chunk_size"],
         state_keys=state_keys,
+        holdout_last=args.holdout_demos,
     )
+    if dataset.heldout_ids:
+        logger.info("held out %d demos from training: %s",
+                    len(dataset.heldout_ids), dataset.heldout_ids)
     loader = DataLoader(
         dataset,
         batch_size=cfg["training"]["batch_size"],

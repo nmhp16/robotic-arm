@@ -63,6 +63,25 @@ CHECK_STEPS     = 3000   # 0.6 s
 INIT_J1, INIT_J2, INIT_J3 = 0.554, -1.381, 0.02
 J3_LIFT = 0.000   # j3=0 = fully retracted; prong tip at 80 mm → plant body clears 45 mm rim
 
+# ── Form-closure: matched waist-and-ridge (optional) ───────────────────────
+# The slip is purely AXIAL: the round stem slides vertically through the V-groove
+# (lateral capture is fine; see /tmp/gripper_geom.png).  A free collar can't help
+# — the tall finger blades (z 29-95) occupy the space above the prongs.  Instead
+# we cut a recessed WAIST into the stem at the grip height and add an inward RIDGE
+# to each finger that seats into it: an axial interlock with NO diameter increase,
+# so the pads still close and there's no blade conflict.  This is what lets a
+# *learned/exploring* controller hold the plant — pure friction on the round stem
+# slips under any control noise (BC/DAgger/RL all capped ~0% lift).  Off by default
+# so the validated scripted oracle path is unchanged; rl_env / the form-closure
+# test set FORM_CLOSURE = True.
+FORM_CLOSURE = False
+# stem necked profile (world-z, m): r3 stub | r2 waist | r3 stub, replacing the
+# plain r3 z30-40 stem.  Ridge reaches radius 2 mm into the waist.
+WAIST_R      = 0.0020     # waist radius (stem stubs stay 3 mm) — best shear hold (81%@±20mm);
+WAIST_Z0     = 0.0340     # deeper r1.5 was WORSE (thin neck levers out, less pad clamp)
+WAIST_Z1     = 0.0370     # waist top  (3 mm tall → ±1.5 mm grasp-z tolerance)
+RIDGE_REACH  = 0.0020     # ridge tip radius from stem axis (= waist radius)
+
 
 # ── SCARA IK ──────────────────────────────────────────────────────────────
 
@@ -206,7 +225,42 @@ def _build_xml() -> str:
             mjcf, count=1,
         )
 
+    # Step 3d: inject form-closure RIDGES into each finger body.  Finger-local
+    # frame (probed at the closed-grasp pose): stem axis at (±1, 0, 70) mm, pad
+    # face at x≈∓2.  A 1 mm inward bump (tip at radius = WAIST_R) seats into the
+    # stem waist; world-z 34-37 maps to finger-local z 68-71 (body at z=105, z
+    # flipped).  Collision geom (default condim/friction) — red so it's visible.
+    if FORM_CLOSURE:
+        def _ridge(sign):   # sign=+1 left (axis at +x), -1 right (axis at -x)
+            # ridge spans from pad face (|x|=2mm) inward to |x|=RIDGE_REACH from
+            # axis; axis at x=sign*1mm → tip at x = sign*1mm - sign*RIDGE_REACH.
+            tip = sign * (0.001 - RIDGE_REACH)
+            face = sign * (-0.002)
+            cx = (tip + face) / 2; hx = abs(tip - face) / 2
+            return (f'<geom name="ridge_{"l" if sign>0 else "r"}" type="box" '
+                    f'pos="{cx:.5f} 0 0.0695" size="{hx:.5f} 0.0012 0.0015" '
+                    f'rgba="0.9 0.2 0.2 1"/>')
+        for _bn, _sgn in (("finger_left", 1), ("finger_right", -1)):
+            mjcf = re.sub(rf'(<body\s+name="{_bn}"[^>]*>)',
+                          lambda m, g=_ridge(_sgn): m.group(1) + '\n      ' + g,
+                          mjcf, count=1)
+
     # Step 4: inject floor, plant, vials at the start of <worldbody>
+    # Stem geometry: plain r3 cylinder (friction), or a necked r3|r2|r3 profile
+    # with a recessed waist for the form-closure ridge to seat into.
+    if FORM_CLOSURE:
+        lo_c = (0.030 + WAIST_Z0) / 2; lo_h = (WAIST_Z0 - 0.030) / 2
+        up_c = (WAIST_Z1 + 0.040) / 2; up_h = (0.040 - WAIST_Z1) / 2
+        wa_c = (WAIST_Z0 + WAIST_Z1) / 2; wa_h = (WAIST_Z1 - WAIST_Z0) / 2
+        fr = 'friction="0.8 0.005 0.0001" rgba="0.35 0.60 0.20 0"'
+        stem_geoms = (
+            f'<geom name="stem_lo" type="cylinder" pos="0 0 {lo_c:.4f}" size="0.003 {lo_h:.4f}" {fr}/>\n'
+            f'      <geom name="stem_waist" type="cylinder" pos="0 0 {wa_c:.4f}" size="{WAIST_R} {wa_h:.4f}" {fr}/>\n'
+            f'      <geom name="stem_up" type="cylinder" pos="0 0 {up_c:.4f}" size="0.003 {up_h:.4f}" {fr}/>'
+        )
+    else:
+        stem_geoms = ('<geom name="stem" type="cylinder" pos="0 0 0.035" size="0.003 0.005"\n'
+                      '            friction="0.8 0.005 0.0001" rgba="0.35 0.60 0.20 0"/>')
     inject_into_worldbody = f"""
     <geom name="floor" type="plane" size="2 2 0.1" rgba="0.55 0.50 0.40 1"
           friction="0.5 0.005 0.0001"/>
@@ -217,8 +271,7 @@ def _build_xml() -> str:
       <geom name="root" type="cylinder" pos="0 0 0.001" size="0.003 0.001"
             rgba="0.2 0.1 0.0 0"/>
       <!-- stem: gripping zone world z=30-40mm (near top of vial, inside) -->
-      <geom name="stem" type="cylinder" pos="0 0 0.035" size="0.003 0.005"
-            friction="0.8 0.005 0.0001" rgba="0.35 0.60 0.20 0"/>
+      {stem_geoms}
       <body name="plant_leaves" pos="0 0 0.040">
         <joint name="plant_bend" type="ball" stiffness="0.001" damping="0.0001"/>
         <inertial pos="0 0 0.007" mass="0.0015" diaginertia="5e-7 5e-7 1e-8"/>

@@ -46,9 +46,13 @@ def render_cameras(ep):
     tcam = mujoco.MjvCamera(); mujoco.mjv_defaultCamera(tcam)
     tcam.lookat[:] = [0.31, 0.065, 0.06]; tcam.distance = 0.42
     tcam.azimuth = 345.0; tcam.elevation = -42.0
-    # wrist_cam: free cam re-posed each frame above the TCP looking down
+    # wrist_cam: side/oblique gripper-follow cam aimed at the fingertip grasp
+    # zone (~0.19 m below link_4). A top-down view (the old el=-89) saw only the
+    # gripper body — the thin stem was occluded; this 3/4 side angle actually
+    # shows the plant, the fingers closing on the stem, and the dest vial, and
+    # stays framed through approach -> lift -> transport (lookat tracks link_4).
     wcam = mujoco.MjvCamera(); mujoco.mjv_defaultCamera(wcam)
-    wcam.distance = 0.18; wcam.azimuth = 90.0; wcam.elevation = -89.0
+    wcam.distance = 0.16; wcam.azimuth = 70.0; wcam.elevation = -35.0
 
     nq = model.nq
     for q in ep.joint_q_frames:
@@ -57,9 +61,11 @@ def render_cameras(ep):
         mujoco.mj_forward(model, data)
         renderer.update_scene(data, camera=tcam)
         ep.cam["table_cam"].append(renderer.render().copy())
-        # wrist cam follows the gripper (link_4 world xy), looking straight down
+        # wrist cam follows the gripper; aim at the fingertip/grasp zone
+        # (~0.19 m below link_4) so the plant + closing fingers stay centered
+        # through grasp and lift (link_4 rises as j3 retracts, plant rises with it)
         lx, ly, lz = data.xpos[link4]
-        wcam.lookat[:] = [lx, ly, max(0.0, lz - 0.15)]
+        wcam.lookat[:] = [lx, ly, max(0.0, lz - 0.19)]
         renderer.update_scene(data, camera=wcam)
         ep.cam["wrist_cam"].append(renderer.render().copy())
         # wrist depth: center-pixel depth

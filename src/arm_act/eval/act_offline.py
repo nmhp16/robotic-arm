@@ -36,6 +36,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--hdf5", type=pathlib.Path, required=True,
                    help="demo HDF5 to evaluate against (held-out set ideally)")
     p.add_argument("--max-demos", type=int, default=0, help="0 = all demos in the file")
+    p.add_argument("--only-last", type=int, default=0,
+                   help="eval only the LAST N demos (by id) — match a training --holdout-demos split")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return p.parse_args()
 
@@ -45,10 +47,11 @@ def main() -> int:
     policy = load_policy(args.checkpoint, device=args.device)
     model = policy.model
     state_keys = tuple(model.cfg.state_keys)
+    camera_keys = tuple(model.cfg.camera_keys)
     action_dim = model.cfg.action_dim
     print(f"[offline] checkpoint: {args.checkpoint}")
     print(f"[offline] state_keys={state_keys}  state_dim={model.cfg.state_dim}  "
-          f"action_dim={action_dim}  cameras={model.cfg.camera_keys or '(none)'}")
+          f"action_dim={action_dim}  cameras={camera_keys or '(none)'}")
 
     abs_err = np.zeros(action_dim, dtype=np.float64)
     sq_err = np.zeros(action_dim, dtype=np.float64)
@@ -58,6 +61,8 @@ def main() -> int:
 
     with h5py.File(str(args.hdf5), "r") as f:
         demo_ids = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[-1]))
+        if args.only_last:
+            demo_ids = demo_ids[-args.only_last:]
         if args.max_demos:
             demo_ids = demo_ids[: args.max_demos]
         for did in demo_ids:
@@ -75,11 +80,21 @@ def main() -> int:
             )
             st = torch.from_numpy(state).to(args.device)
             st_norm = normalize_states(st, policy.state_stats)
-            empty_imgs: dict[str, torch.Tensor] = {}
+            # camera images per frame (T,H,W,3)u8 -> (T,3,H,W)u8; empty for state-only
+            imgs_full = {
+                cam: torch.from_numpy(np.asarray(obs[cam], dtype=np.uint8))
+                .permute(0, 3, 1, 2).contiguous()
+                for cam in camera_keys
+            }
+            preds = []
+            BS = 128  # chunk frames so the ResNet batch fits memory
             with torch.inference_mode():
-                # First action of the predicted chunk at each frame == the
-                # action the policy would actually emit at that state.
-                pred_norm = model(empty_imgs, st_norm)[:, 0, :]  # (T, action_dim)
+                for s in range(0, T, BS):
+                    e = min(s + BS, T)
+                    imgs = {c: v[s:e].to(args.device) for c, v in imgs_full.items()}
+                    # First action of the predicted chunk == what the policy emits here.
+                    preds.append(model(imgs, st_norm[s:e])[:, 0, :])
+            pred_norm = torch.cat(preds, dim=0)  # (T, action_dim)
             pred = policy._unnormalize_action(pred_norm).cpu().numpy()
 
             err = pred - actions
